@@ -2,8 +2,8 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'CRM System - Modern Enterprise Management',
-  description: 'Full stack CRM system with Inventory, Orders, Purchase, Shipment, Employee RBAC, and Account modules.',
+  title: 'CRM Suite — Enterprise B2B Management Platform',
+  description: 'Enterprise-grade CRM platform with Inventory, Orders, Procurement, Shipment Tracking, Employee RBAC, and Account Management modules.',
 };
 
 export default function RootLayout({
@@ -13,7 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-slate-950 text-slate-100 antialiased selection:bg-blue-500 selection:text-white">
+      <body className="bg-[#f1f5f9] text-slate-800 antialiased">
         {children}
       </body>
     </html>

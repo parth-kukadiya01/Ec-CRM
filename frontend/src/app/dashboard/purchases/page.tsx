@@ -1,18 +1,21 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { purchasesApi, ordersApi, inventoryApi } from '@/lib/api';
-import { ShoppingBag, CheckCircle, Clock, PackageCheck, AlertTriangle, Truck, Edit2, Trash2, Package } from 'lucide-react';
+import { purchasesApi, ordersApi, inventoryApi, authApi } from '@/lib/api';
+import { ShoppingBag, CheckCircle, Clock, PackageCheck, Edit2, Trash2, ShieldAlert } from 'lucide-react';
+import ResizableTable from '@/components/ResizableTable';
+import { hasPermission } from '@/lib/permissions';
 
 export default function PurchasesPage() {
   const [activeTab, setActiveTab] = useState<'pending' | 'purchases'>('pending');
-  
+
   const [orders, setOrders] = useState<any[]>([]);
   const [inventoryList, setInventoryList] = useState<any[]>([]);
   const [purchases, setPurchases] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Make a Purchase Modal state
+  // Pending Procurement Modal state
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [purchaseForm, setPurchaseForm] = useState({
@@ -55,9 +58,11 @@ export default function PurchasesPage() {
       const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
       const invRes = await inventoryApi.list().catch(() => ({ data: [] }));
       const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
+      const meRes = await authApi.getMe().catch(() => ({ data: null }));
       setOrders(ordRes.data || []);
       setInventoryList(invRes.data || []);
       setPurchases(purRes.data || []);
+      setCurrentUser(meRes?.data || null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -69,9 +74,8 @@ export default function PurchasesPage() {
     loadAllData();
   }, []);
 
-  // Pending orders
   const pendingOrders = orders.filter(
-    (ord) => ord.status === 'Pending Review' || ord.status === 'Make a Purchase' || ord.status === 'Out of Stock'
+    (ord) => ord.status === 'Pending Review' || ord.status === 'Pending Procurement' || ord.status === 'Out of Stock'
   );
 
   const getStock = (ord: any) => {
@@ -123,11 +127,10 @@ export default function PurchasesPage() {
       loadAllData();
     } catch (err) {
       console.error(err);
-      alert('Error creating procurement purchase');
+      alert('Error creating purchase');
     }
   };
 
-  // Mark Purchase Done & Restock
   const handlePurchaseDone = async (id: number) => {
     try {
       await purchasesApi.update(id, { status: 'Received' });
@@ -138,9 +141,8 @@ export default function PurchasesPage() {
     }
   };
 
-  // Delete Purchase
   const handleDeletePurchase = async (id: number) => {
-    if (confirm('Are you sure you want to delete this purchase entry?')) {
+    if (confirm('Delete this purchase?')) {
       try {
         await purchasesApi.delete(id);
         loadAllData();
@@ -151,7 +153,6 @@ export default function PurchasesPage() {
     }
   };
 
-  // Open Edit Purchase Modal
   const openEditPurchaseModal = (pur: any) => {
     setEditingPurchase(pur);
     setEditPurchaseForm({
@@ -176,9 +177,8 @@ export default function PurchasesPage() {
     }
   };
 
-  // Delete Order
   const handleDeleteOrder = async (id: number) => {
-    if (confirm('Are you sure you want to delete this order?')) {
+    if (confirm('Delete this order?')) {
       try {
         await ordersApi.delete(id);
         loadAllData();
@@ -189,7 +189,6 @@ export default function PurchasesPage() {
     }
   };
 
-  // Open Edit Order Modal
   const openEditOrderModal = (order: any) => {
     setEditingOrder(order);
     setEditOrderForm({
@@ -217,51 +216,81 @@ export default function PurchasesPage() {
     }
   };
 
+  const roleName = currentUser?.role_name || (currentUser?.is_admin ? 'Super Admin' : 'Employee');
+  const isAllowed = hasPermission(currentUser, 'purchases:read');
+  const canWrite = hasPermission(currentUser, 'purchases:write');
+
+  if (!loading && currentUser && !isAllowed) {
+    return (
+      <div className="py-16 text-center card-premium p-8 max-w-lg mx-auto mt-10">
+        <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3" />
+        <h2 className="text-lg font-bold text-surface-900">Access Restricted</h2>
+        <p className="text-xs text-surface-500 mt-1">
+          Your role (<strong className="text-surface-700">{roleName}</strong>) is restricted to your specific department.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            <ShoppingBag className="w-7 h-7 text-amber-600" />
-            Purchase Department & Procurement
+          <h1 className="text-xl font-bold text-surface-900 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
+              <ShoppingBag className="w-4 h-4" />
+            </div>
+            Purchases & Procurement
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Review incoming sales orders, verify stock availability, approve for shipment, or generate supplier purchase orders</p>
+          <p className="text-xs text-surface-400 mt-0.5">Order review, stock verification, and supplier procurement</p>
         </div>
+
+        {canWrite && (
+          <button
+            onClick={() => {
+              if (orders.length > 0) {
+                openPurchaseModal(orders[0]);
+              } else {
+                alert('No pending orders available to create a purchase order');
+              }
+            }}
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all self-start sm:self-auto"
+          >
+            <ShoppingBag className="w-3.5 h-3.5" />
+            <span>+ Create Purchase Order</span>
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+      <div className="flex items-center gap-2 border-b border-surface-200 pb-3">
         <button
           onClick={() => setActiveTab('pending')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-            activeTab === 'pending'
-              ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === 'pending'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'bg-white text-surface-600 border border-surface-200 hover:bg-surface-50'
+            }`}
         >
-          <Clock className="w-4 h-4" />
-          <span>Orders Pending Review</span>
-          <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${
-            activeTab === 'pending' ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-700'
-          }`}>
+          <Clock className="w-3.5 h-3.5" />
+          <span>Pending Review</span>
+          <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'pending' ? 'bg-blue-700 text-white' : 'bg-surface-100 text-surface-700'
+            }`}>
             {pendingOrders.length}
           </span>
         </button>
 
         <button
           onClick={() => setActiveTab('purchases')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-            activeTab === 'purchases'
-              ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === 'purchases'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'bg-white text-surface-600 border border-surface-200 hover:bg-surface-50'
+            }`}
         >
-          <PackageCheck className="w-4 h-4" />
-          <span>Procurement Purchase Orders</span>
-          <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${
-            activeTab === 'purchases' ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-700'
-          }`}>
+          <PackageCheck className="w-3.5 h-3.5" />
+          <span>Purchase Orders</span>
+          <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'purchases' ? 'bg-blue-700 text-white' : 'bg-surface-100 text-surface-700'
+            }`}>
             {purchases.length}
           </span>
         </button>
@@ -269,100 +298,106 @@ export default function PurchasesPage() {
 
       {/* TAB 1: Orders Pending Review */}
       {activeTab === 'pending' && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="card-premium overflow-hidden">
           {loading ? (
-            <div className="py-12 text-center text-slate-400 text-sm">Loading incoming orders...</div>
+            <div className="py-12 text-center">
+              <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <span className="text-xs text-surface-400">Loading orders...</span>
+            </div>
           ) : pendingOrders.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 text-sm">
-              <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
-              All incoming orders have been reviewed and processed!
+            <div className="py-12 text-center">
+              <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
+              <p className="text-xs font-semibold text-surface-700">All orders processed and routed!</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+            <div className="table-container">
+              <ResizableTable className="w-full text-left text-sm">
                 <thead>
-                  <tr className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-4">Order #</th>
-                    <th className="py-3.5 px-4">Date</th>
-                    <th className="py-3.5 px-4">Buyer & Contact</th>
-                    <th className="py-3.5 px-4">Product Name</th>
-                    <th className="py-3.5 px-4">Required Qty</th>
-                    <th className="py-3.5 px-4">Inventory Stock</th>
-                    <th className="py-3.5 px-4 text-center">Purchase Department Actions</th>
-                    <th className="py-3.5 px-4 text-right">Actions</th>
+                  <tr className="bg-slate-100 text-slate-700 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
+                    <th className="py-3 px-4">Order #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Buyer & Partner</th>
+                    <th className="py-3 px-4">Product</th>
+                    <th className="py-3 px-4">Qty</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Database Stock Status</th>
+                    <th className="py-3 px-4 text-center">Purchase Manager Actions</th>
+                    <th className="py-3 px-4 text-right">Manage</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
+                <tbody className="divide-y divide-surface-100">
                   {pendingOrders.map((ord) => {
                     const currentStock = getStock(ord);
                     const isStockSufficient = currentStock >= ord.qty;
 
                     return (
-                      <tr key={ord.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3.5 px-4 font-mono font-medium text-blue-600">{ord.order_number}</td>
-                        <td className="py-3.5 px-4 text-xs text-slate-500">{ord.order_date}</td>
-                        <td className="py-3.5 px-4">
-                          <div className="font-semibold text-slate-900">{ord.buyer_name}</div>
-                          <div className="text-xs text-slate-500">{ord.mobile_number}</div>
+                      <tr key={ord.id} className="table-row-hover">
+                        <td className="py-3 px-4 font-mono font-semibold text-blue-600 whitespace-nowrap">{ord.order_number}</td>
+                        <td className="py-3 px-4 text-xs text-slate-600 font-medium whitespace-nowrap">{ord.order_date}</td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="font-bold text-slate-900">{ord.buyer_name}</div>
+                          <div className="text-xs text-blue-600 font-semibold">{ord.account_name || 'Channel Partner'}</div>
                         </td>
-                        <td className="py-3.5 px-4 font-medium text-slate-900">{ord.product_name}</td>
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{ord.qty} units</td>
-                        <td className="py-3.5 px-4">
+                        <td className="py-3 px-4 font-semibold text-slate-800 whitespace-nowrap">{ord.product_name}</td>
+                        <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{ord.qty} units</td>
+                        <td className="py-3 px-4 whitespace-nowrap">
                           <span
-                            className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1 ${
-                              isStockSufficient
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-700 border border-amber-200'
-                            }`}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold whitespace-nowrap shrink-0 ${isStockSufficient
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+                                : 'bg-amber-50 text-amber-800 border border-amber-300'
+                              }`}
                           >
-                            <Package className="w-3.5 h-3.5" />
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: isStockSufficient ? '#10b981' : '#f59e0b' }} />
                             {isStockSufficient
-                              ? `Stock OK: ${currentStock} in stock`
-                              : `Stock Low: ${currentStock} in stock`}
+                              ? `Stock Available: ${currentStock} in DB`
+                              : `Insufficient DB Stock: ${currentStock} available`}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-center">
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => handleMarkReadyForShipment(ord.id)}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all"
-                              title="Mark order ready for shipment"
-                            >
-                              <Truck className="w-3.5 h-3.5" />
-                              <span>Ready for Shipment</span>
-                            </button>
+                            {isStockSufficient && (
+                              <button
+                                onClick={() => handleMarkReadyForShipment(ord.id)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-lg shadow-xs inline-flex items-center gap-1.5 transition-all"
+                                title="Approve order and deduct inventory stock"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                <span>Approve & Fulfill</span>
+                              </button>
+                            )}
 
                             <button
                               onClick={() => openPurchaseModal(ord)}
-                              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all"
-                              title="Generate supplier purchase order"
+                              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-lg shadow-xs inline-flex items-center gap-1.5 transition-all"
+                              title="Create supplier purchase order"
                             >
                               <ShoppingBag className="w-3.5 h-3.5" />
-                              <span>Make a Purchase</span>
+                              <span>Create PO</span>
                             </button>
                           </div>
                         </td>
-                        <td className="py-3.5 px-4 text-right space-x-2">
-                          <button
-                            onClick={() => openEditOrderModal(ord)}
-                            className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                            title="Edit Order"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteOrder(ord.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title="Delete Order"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => openEditOrderModal(ord)}
+                              className="p-1.5 rounded-md text-surface-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
+                              title="Edit"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteOrder(ord.id)}
+                              className="p-1.5 rounded-md text-surface-400 hover:text-red-600 hover:bg-red-50 transition-all"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
-              </table>
+              </ResizableTable>
             </div>
           )}
         </div>
@@ -370,184 +405,177 @@ export default function PurchasesPage() {
 
       {/* TAB 2: Procurement Purchase Orders */}
       {activeTab === 'purchases' && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="card-premium overflow-hidden">
           {loading ? (
-            <div className="py-12 text-center text-slate-400 text-sm">Loading procurement purchases...</div>
+            <div className="py-12 text-center">
+              <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <span className="text-xs text-surface-400">Loading purchase orders...</span>
+            </div>
           ) : purchases.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-sm">No procurement purchases recorded yet</div>
+            <div className="py-12 text-center">
+              <PackageCheck className="w-10 h-10 text-surface-300 mx-auto mb-2" />
+              <p className="text-xs text-surface-400">No purchases recorded</p>
+            </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+            <div className="table-container">
+              <ResizableTable className="w-full text-left text-sm">
                 <thead>
-                  <tr className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-4">Order ID</th>
-                    <th className="py-3.5 px-4">Order Date</th>
-                    <th className="py-3.5 px-4">Product Name</th>
-                    <th className="py-3.5 px-4">Qty</th>
-                    <th className="py-3.5 px-4">Purchase Value</th>
-                    <th className="py-3.5 px-4">Est. Delivery Date</th>
-                    <th className="py-3.5 px-4">Account / Supplier</th>
-                    <th className="py-3.5 px-4">Status</th>
-                    <th className="py-3.5 px-4 text-center">Purchase Item Status</th>
-                    <th className="py-3.5 px-4 text-right">Actions</th>
+                  <tr className="bg-surface-50 text-surface-500 text-[11px] font-semibold uppercase tracking-wider border-b border-surface-200">
+                    <th className="py-3 px-4">Order #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Product</th>
+                    <th className="py-3 px-4">Qty</th>
+                    <th className="py-3 px-4">Value (₹)</th>
+                    <th className="py-3 px-4">Est. Delivery</th>
+                    <th className="py-3 px-4">Supplier</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {purchases.map((pur) => {
-                    const isReceived = pur.status === 'Received';
-                    return (
-                      <tr key={pur.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3.5 px-4 font-mono text-xs text-blue-600 font-medium">#ORD-{pur.order_id}</td>
-                        <td className="py-3.5 px-4 text-xs text-slate-500">{pur.order_date}</td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-900">{pur.product_name}</td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-800">{pur.qty}</td>
-                        <td className="py-3.5 px-4 font-semibold text-emerald-700">${pur.purchase_value.toFixed(2)}</td>
-                        <td className="py-3.5 px-4 text-xs text-slate-600">{pur.estimated_shipment_date || 'TBD'}</td>
-                        <td className="py-3.5 px-4 text-xs text-slate-500">{pur.account_name || 'N/A'}</td>
-                        <td className="py-3.5 px-4">
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1 ${
-                              isReceived
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-700 border border-amber-200'
-                            }`}
-                          >
-                            {isReceived ? <CheckCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
-                            {isReceived ? 'Received / Done' : pur.status}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-center">
-                          {!isReceived ? (
+                <tbody className="divide-y divide-surface-100">
+                  {purchases.map((pur) => (
+                    <tr key={pur.id} className="table-row-hover">
+                      <td className="py-3 px-4 font-mono font-medium text-blue-600 whitespace-nowrap">#ORD-{pur.order_id}</td>
+                      <td className="py-3 px-4 text-xs text-surface-400 whitespace-nowrap">{pur.order_date || '—'}</td>
+                      <td className="py-3 px-4 font-semibold text-surface-900 whitespace-nowrap">{pur.product_name}</td>
+                      <td className="py-3 px-4 font-bold text-surface-800 whitespace-nowrap">{pur.qty}</td>
+                      <td className="py-3 px-4 font-semibold text-emerald-600 whitespace-nowrap">₹{pur.purchase_value.toFixed(2)}</td>
+                      <td className="py-3 px-4 text-xs text-surface-500 whitespace-nowrap">{pur.estimated_shipment_date || 'TBD'}</td>
+                      <td className="py-3 px-4 text-xs text-surface-600 whitespace-nowrap">{pur.account_name || 'Direct'}</td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${pur.status === 'Received'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/80'
+                            : 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                          }`}>
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: pur.status === 'Received' ? '#10b981' : '#f59e0b' }} />
+                          {pur.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1">
+                          {pur.status !== 'Received' && (
                             <button
                               onClick={() => handlePurchaseDone(pur.id)}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all"
+                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 rounded-md text-xs font-semibold transition-all"
                             >
-                              <CheckCircle className="w-3.5 h-3.5" />
-                              <span>Purchase Done (Received & Restock)</span>
+                              Received
                             </button>
-                          ) : (
-                            <span className="text-xs text-slate-400 italic font-semibold">Purchase Done & Restocked</span>
                           )}
-                        </td>
-                        <td className="py-3.5 px-4 text-right space-x-2">
                           <button
                             onClick={() => openEditPurchaseModal(pur)}
-                            className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                            title="Edit Purchase"
+                            className="p-1.5 rounded-md text-surface-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDeletePurchase(pur.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title="Delete Purchase"
+                            className="p-1.5 rounded-md text-surface-400 hover:text-red-600 hover:bg-red-50 transition-all"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
-              </table>
+              </ResizableTable>
             </div>
           )}
         </div>
       )}
 
-      {/* MAKE A PURCHASE MODAL */}
+      {/* Make Purchase Modal */}
       {showPurchaseModal && selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-lg rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <ShoppingBag className="w-6 h-6 text-amber-600" />
-              Make a Procurement Purchase
-            </h2>
-            <p className="text-xs text-slate-500">Enter procurement purchase details for company inventory restock</p>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-md rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <ShoppingBag className="w-4 h-4 text-amber-600" />
+                Make Purchase
+              </h2>
+            </div>
 
-            <form onSubmit={handleCreatePurchase} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleCreatePurchase} className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Purchase Order ID *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">PO ID *</label>
                   <input
                     type="text"
                     required
                     value={purchaseForm.order_number}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, order_number: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 font-mono font-medium focus:outline-none focus:border-amber-600"
-                    placeholder="Enter Purchase Order ID..."
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 font-mono input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order Date *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Date *</label>
                   <input
                     type="date"
                     required
                     value={purchaseForm.order_date}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, order_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product *</label>
                 <input
                   type="text"
                   required
                   value={purchaseForm.product_name}
                   onChange={(e) => setPurchaseForm({ ...purchaseForm, product_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Purchase Value ($) *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Value (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={purchaseForm.purchase_value}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Estimated Delivery Date</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Est. Delivery</label>
                   <input
                     type="date"
                     value={purchaseForm.estimated_shipment_date}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Account / Supplier Name</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Supplier</label>
                 <input
                   type="text"
                   value={purchaseForm.account_name}
                   onChange={(e) => setPurchaseForm({ ...purchaseForm, account_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
-                  placeholder="e.g. Vendor Supplier Account"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowPurchaseModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="btn-primary"
                 >
-                  Submit Purchase Entry
+                  Submit
                 </button>
               </div>
             </form>
@@ -555,176 +583,76 @@ export default function PurchasesPage() {
         </div>
       )}
 
-      {/* EDIT PURCHASE MODAL */}
+      {/* Edit Purchase Modal */}
       {showEditPurchaseModal && editingPurchase && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <Edit2 className="w-6 h-6 text-blue-600" />
-              Edit Purchase Entry (#ORD-{editingPurchase.order_id})
-            </h2>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-md rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-blue-600" />
+                Edit Purchase
+              </h2>
+            </div>
 
-            <form onSubmit={handleUpdatePurchase} className="space-y-4">
+            <form onSubmit={handleUpdatePurchase} className="p-5 space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Purchase Value ($)</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Value (₹)</label>
                 <input
                   type="number"
                   step="0.01"
                   required
                   value={editPurchaseForm.purchase_value}
                   onChange={(e) => setEditPurchaseForm({ ...editPurchaseForm, purchase_value: parseFloat(e.target.value) || 0 })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Estimated Delivery Date</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Est. Delivery</label>
                 <input
                   type="date"
                   value={editPurchaseForm.estimated_shipment_date}
                   onChange={(e) => setEditPurchaseForm({ ...editPurchaseForm, estimated_shipment_date: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Account / Supplier Name</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Supplier</label>
                 <input
                   type="text"
                   value={editPurchaseForm.account_name}
                   onChange={(e) => setEditPurchaseForm({ ...editPurchaseForm, account_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Status</label>
                 <select
                   value={editPurchaseForm.status}
                   onChange={(e) => setEditPurchaseForm({ ...editPurchaseForm, status: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 >
                   <option value="Pending">Pending</option>
-                  <option value="Received">Received / Done</option>
+                  <option value="Ordered">Ordered</option>
+                  <option value="Received">Received</option>
                 </select>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowEditPurchaseModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="btn-primary"
                 >
-                  Save Purchase Changes
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* EDIT ORDER MODAL */}
-      {showEditOrderModal && editingOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <Edit2 className="w-6 h-6 text-blue-600" />
-              Edit Order ({editingOrder.order_number})
-            </h2>
-
-            <form onSubmit={handleUpdateOrder} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Buyer Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editOrderForm.buyer_name}
-                  onChange={(e) => setEditOrderForm({ ...editOrderForm, buyer_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Mobile Number</label>
-                <input
-                  type="text"
-                  required
-                  value={editOrderForm.mobile_number}
-                  onChange={(e) => setEditOrderForm({ ...editOrderForm, mobile_number: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editOrderForm.product_name}
-                  onChange={(e) => setEditOrderForm({ ...editOrderForm, product_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    required
-                    value={editOrderForm.qty}
-                    onChange={(e) => setEditOrderForm({ ...editOrderForm, qty: parseInt(e.target.value) || 1 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Price ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    value={editOrderForm.product_price}
-                    onChange={(e) => setEditOrderForm({ ...editOrderForm, product_price: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                <select
-                  value={editOrderForm.status}
-                  onChange={(e) => setEditOrderForm({ ...editOrderForm, status: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                >
-                  <option value="Pending Review">Pending Review</option>
-                  <option value="Ready for Shipment">Ready for Shipment</option>
-                  <option value="Make a Purchase">Make a Purchase</option>
-                  <option value="Purchased">Purchased</option>
-                  <option value="Shipped">Shipped</option>
-                  <option value="Delivered">Delivered</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowEditOrderModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-xs"
-                >
-                  Save Order Changes
+                  Save
                 </button>
               </div>
             </form>

@@ -1,12 +1,15 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { 
-  ShoppingCart, 
-  Package, 
-  ShoppingBag, 
-  Truck, 
-  Users, 
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { hasPermission } from '@/lib/permissions';
+import {
+  ShoppingCart,
+  Package,
+  ShoppingBag,
+  Truck,
+  Users,
   Building2,
   AlertTriangle,
   ArrowUpRight,
@@ -22,11 +25,14 @@ import {
   ChevronDown,
   Store,
   Calendar,
-  Filter
+  Filter,
+  CheckSquare,
+  Plus
 } from 'lucide-react';
-import { ordersApi, inventoryApi, purchasesApi, shipmentsApi, usersApi, accountsApi, authApi } from '@/lib/api';
+import { ordersApi, inventoryApi, purchasesApi, shipmentsApi, usersApi, accountsApi, authApi, tasksApi } from '@/lib/api';
 
 export default function DashboardOverview() {
+  const router = useRouter();
   // Active Dashboard Selector: 'superadmin' | 'purchase' | 'shipment'
   const [currentDashboard, setCurrentDashboard] = useState<'superadmin' | 'purchase' | 'shipment'>('superadmin');
 
@@ -41,6 +47,7 @@ export default function DashboardOverview() {
   const [shipmentsList, setShipmentsList] = useState<any[]>([]);
   const [accountsList, setAccountsList] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
+  const [tasksList, setTasksList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modal States
@@ -57,6 +64,7 @@ export default function DashboardOverview() {
       const usersRes = await usersApi.list().catch(() => ({ data: [] }));
       const accRes = await accountsApi.list().catch(() => ({ data: [] }));
       const meRes = await authApi.getMe().catch(() => ({ data: null }));
+      const tasksRes = await tasksApi.list().catch(() => ({ data: [] }));
 
       const allOrders = ordersRes.data || [];
       const allInv = invRes.data || [];
@@ -65,6 +73,7 @@ export default function DashboardOverview() {
       const allUsers = usersRes.data || [];
       const allAcc = accRes.data || [];
       const me = meRes?.data || null;
+      const allTasks = tasksRes.data || [];
 
       setCurrentUser(me);
 
@@ -83,6 +92,7 @@ export default function DashboardOverview() {
       setShipmentsList(allShip);
       setUsersList(allUsers);
       setAccountsList(allAcc);
+      setTasksList(allTasks);
     } catch (err) {
       console.error(err);
     } finally {
@@ -102,7 +112,7 @@ export default function DashboardOverview() {
     return items.filter((item) => {
       const rawDate = item.order_date || item.created_at;
       if (!rawDate) return range === 'all';
-      
+
       const d = new Date(rawDate);
       const itemDateStr = d.toISOString().split('T')[0];
 
@@ -133,17 +143,17 @@ export default function DashboardOverview() {
   const lowStockCount = inventoryList.filter((i: any) => i.stock_quantity <= 2).length;
 
   const pendingReviewOrdersList = displayOrders.filter(
-    (o) => o.status === 'Pending Review' || o.status === 'Make a Purchase' || o.status === 'Out of Stock'
+    (o) => o.status === 'Pending Review' || o.status === 'Pending Procurement' || o.status === 'Backordered'
   );
 
   const readyForShipmentOrdersList = displayOrders.filter(
-    (o) => o.status === 'Ready for Shipment'
+    (o) => o.status === 'Ready to Ship'
   );
 
   // Group Orders by Account / Channel for the modal
   const getOrdersByAccount = () => {
     const map: { [key: string]: { count: number; totalRevenue: number; orders: any[] } } = {};
-    
+
     displayOrders.forEach((ord) => {
       const accName = ord.account_name || 'Direct Admin Sales';
       if (!map[accName]) {
@@ -160,151 +170,175 @@ export default function DashboardOverview() {
   // Pending Purchases Breakdown for the modal
   const getPendingPurchasesBreakdown = () => {
     const pendingReviewOrders = displayOrders.filter(
-      (o) => o.status === 'Pending Review' || o.status === 'Make a Purchase' || o.status === 'Out of Stock'
+      (o) => o.status === 'Pending Review' || o.status === 'Pending Procurement' || o.status === 'Backordered'
     );
-    
+
     return {
       pendingReviewOrders,
       activePurchaseOrders: displayPurchases,
     };
   };
 
-  const cards = [
-    { 
-      id: 'orders', 
-      title: ordersTimeRange === 'today' ? "Today's Orders" : `${ordersTimeRange.toUpperCase()} Orders`, 
-      value: displayOrders.length, 
-      subtitle: 'Click for Account-wise order breakdown',
-      icon: ShoppingCart, 
-      color: 'from-blue-600 to-indigo-600',
+  const roleName = currentUser?.role_name || (currentUser?.is_admin ? 'Super Admin' : '');
+
+  const allCards = [
+    {
+      id: 'orders',
+      title: ordersTimeRange === 'today' ? "Today's Orders" : `${ordersTimeRange.toUpperCase()} Orders`,
+      value: displayOrders.length,
+      subtitle: 'View Orders',
+      icon: ShoppingCart,
+      color: 'from-blue-600 to-blue-700',
       timeRange: ordersTimeRange,
       setTimeRange: setOrdersTimeRange,
     },
-    { 
-      id: 'purchases', 
-      title: purchasesTimeRange === 'today' ? "Today's Purchases" : `${purchasesTimeRange.toUpperCase()} Purchases`, 
-      value: displayPurchases.length + pendingReviewOrdersList.length, 
-      subtitle: 'Click for product qty & price requirement',
-      icon: ShoppingBag, 
-      color: 'from-amber-600 to-orange-600',
+    {
+      id: 'purchases',
+      title: purchasesTimeRange === 'today' ? "Today's Purchases" : `${purchasesTimeRange.toUpperCase()} Purchases`,
+      value: displayPurchases.length + pendingReviewOrdersList.length,
+      subtitle: 'View Purchases',
+      icon: ShoppingBag,
+      color: 'from-blue-700 to-indigo-700',
       timeRange: purchasesTimeRange,
-      setTimeRange: setPurchasesTimeRange, 
+      setTimeRange: setPurchasesTimeRange,
     },
-    { 
-      id: 'inventory', 
-      title: 'Inventory Stock', 
-      value: inventoryList.length, 
-      subtitle: `${lowStockCount} low stock alerts`,
-      icon: Package, 
-      color: 'from-emerald-600 to-teal-600', 
+    {
+      id: 'inventory',
+      title: 'Inventory Stock',
+      value: inventoryList.length,
+      subtitle: lowStockCount > 0 ? `${lowStockCount} low stock alerts` : 'Stock updated',
+      icon: Package,
+      color: 'from-sky-600 to-blue-600',
     },
-    { 
-      id: 'shipments', 
-      title: 'Shipments Tracked', 
-      value: displayShipments.length, 
-      subtitle: 'Click to view carrier status',
-      icon: Truck, 
-      color: 'from-purple-600 to-pink-600',
+    {
+      id: 'shipments',
+      title: 'Shipments Tracked',
+      value: displayShipments.length,
+      subtitle: 'View Shipments',
+      icon: Truck,
+      color: 'from-blue-800 to-slate-800',
       timeRange: shipmentsTimeRange,
-      setTimeRange: setShipmentsTimeRange, 
+      setTimeRange: setShipmentsTimeRange,
     },
-    { 
-      id: 'employees', 
-      title: 'Team Employees', 
-      value: usersList.length, 
-      subtitle: 'Click to view active staff',
-      icon: Users, 
-      color: 'from-cyan-600 to-blue-600', 
+    {
+      id: 'employees',
+      title: 'Team Employees',
+      value: usersList.length,
+      subtitle: 'View Team',
+      icon: Users,
+      color: 'from-blue-500 to-indigo-600',
     },
-    { 
-      id: 'accounts', 
-      title: 'Registered Accounts', 
-      value: accountsList.length, 
-      subtitle: 'Click to view market accounts',
-      icon: Building2, 
-      color: 'from-rose-600 to-red-600', 
+    {
+      id: 'accounts',
+      title: 'Registered Accounts',
+      value: accountsList.length,
+      subtitle: 'View Accounts',
+      icon: Building2,
+      color: 'from-indigo-600 to-blue-700',
     },
   ];
 
+  const assignedPartnersCount = usersList.filter((u: any) => u.is_partner && u.assigned_employee_id === currentUser?.id).length;
+
+  const isPartner = currentUser?.is_partner || currentUser?.role_name === 'Channel Partner';
+
+  let visibleCards = allCards.filter((card) => {
+    if (isPartner) {
+      return ['orders', 'inventory', 'shipments'].includes(card.id);
+    }
+    if (card.id === 'inventory') return hasPermission(currentUser, 'inventory:read');
+    if (card.id === 'orders') return hasPermission(currentUser, 'orders:read');
+    if (card.id === 'purchases') return hasPermission(currentUser, 'purchases:read');
+    if (card.id === 'shipments') return hasPermission(currentUser, 'shipments:read');
+    return false;
+  });
+
+  if (visibleCards.length === 0 && currentUser && !isPartner) {
+    visibleCards = [
+      {
+        id: 'assigned_partners',
+        title: 'Assigned Onboarding Partners',
+        value: assignedPartnersCount,
+        subtitle: 'View Partners',
+        icon: Store,
+        color: 'from-blue-600 to-indigo-600',
+      },
+      {
+        id: 'active_tasks',
+        title: 'Active Tasks',
+        value: tasksList.filter((t: any) => t.status !== 'Completed').length,
+        subtitle: 'View Active Tasks',
+        icon: CheckSquare,
+        color: 'from-indigo-600 to-purple-600',
+      },
+      {
+        id: 'completed_tasks',
+        title: 'Completed Tasks',
+        value: tasksList.filter((t: any) => t.status === 'Completed').length,
+        subtitle: 'View History',
+        icon: ShieldCheck,
+        color: 'from-emerald-600 to-teal-600',
+      },
+    ];
+  }
+
   return (
-    <div className="space-y-8">
-      {/* Top Header & Dashboard View Selector Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-xs text-blue-700 font-semibold mb-2">
-            <Sparkles className="w-3.5 h-3.5" />
-            CRM Operational Control Center
-          </div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-            {currentDashboard === 'superadmin' && '1. All-In-One Superadmin Dashboard'}
-            {currentDashboard === 'purchase' && '2. Purchase Department Dashboard'}
-            {currentDashboard === 'shipment' && '3. Shipment Logistics Dashboard'}
-          </h1>
-          <p className="text-slate-500 text-xs mt-1">
-            Operational dashboard with individual time filters inside each card and department panel
-          </p>
-        </div>
+    <div className="space-y-6">
 
-        {/* Department View Switcher */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shrink-0">
-          <button
-            onClick={() => setCurrentDashboard('superadmin')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-              currentDashboard === 'superadmin' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Overview
-          </button>
-          <button
-            onClick={() => setCurrentDashboard('purchase')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-              currentDashboard === 'purchase' ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Purchase
-          </button>
-          <button
-            onClick={() => setCurrentDashboard('shipment')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-              currentDashboard === 'shipment' ? 'bg-purple-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Shipment
-          </button>
-        </div>
-      </div>
-
-      {/* Low Stock Warning Banner */}
-      {lowStockCount > 0 && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between shadow-xs">
+      {/* Low Stock Warning Banner - Shown to Admin and Inventory Manager (Not Partners) */}
+      {!isPartner && lowStockCount > 0 && hasPermission(currentUser, 'inventory:read') && (
+        <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200/60 flex items-center justify-between animate-fade-in">
           <div className="flex items-center gap-3 text-amber-800 text-sm font-medium">
-            <AlertTriangle className="w-5 h-5 shrink-0 text-amber-600" />
+            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+            </div>
             <span>Notice: <strong className="text-amber-900">{lowStockCount}</strong> product(s) in inventory are low or out of stock.</span>
           </div>
-          <button
-            onClick={() => setActiveModal('inventory')}
-            className="text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors shadow-xs"
+          <a
+            href="/dashboard/inventory"
+            className="text-xs font-semibold px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-all"
           >
-            View Low Stock Details &rarr;
-          </button>
+            View Details →
+          </a>
         </div>
       )}
 
-      {/* Grid Metrics Cards - WITH IN-CARD TIME FILTERS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {cards.map((card) => {
+      {/* Grid Metrics Cards - 4-Column B2B Layout */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {visibleCards.map((card, index) => {
           const Icon = card.icon;
+
+          const handleCardClick = () => {
+            const routeMap: { [key: string]: string } = {
+              orders: '/dashboard/orders',
+              purchases: '/dashboard/purchases',
+              inventory: '/dashboard/inventory',
+              shipments: '/dashboard/shipments',
+              employees: '/dashboard/employees',
+              accounts: '/dashboard/accounts',
+              assigned_partners: '/dashboard/partners',
+              active_tasks: '/dashboard/tasks',
+              completed_tasks: '/dashboard/tasks',
+            };
+            const target = routeMap[card.id];
+            if (target) {
+              router.push(target);
+            }
+          };
+
           return (
             <div
               key={card.id}
-              className="group text-left relative bg-white border border-slate-200 hover:border-blue-400 p-6 rounded-2xl transition-all duration-300 shadow-sm hover:shadow-md flex flex-col justify-between"
+              onClick={handleCardClick}
+              className="group text-left relative bg-white border border-slate-200/90 rounded-xl p-4.5 flex flex-col justify-between cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-blue-300 select-none"
+              style={{ animationDelay: `${index * 60}ms` }}
             >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className={`w-9 h-9 rounded-lg bg-gradient-to-tr ${card.color} flex items-center justify-center text-white shadow-xs`}>
-                    <Icon className="w-4.5 h-4.5" />
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center text-white shadow-xs`}>
+                    <Icon className="w-4 h-4" />
                   </div>
-                  <p className="text-xs font-bold uppercase text-slate-700 tracking-wider">{card.title}</p>
+                  <p className="text-[11px] font-bold uppercase text-slate-500 tracking-wider">{card.title}</p>
                 </div>
 
                 {/* Per-Card Time Filter Selector */}
@@ -313,60 +347,191 @@ export default function DashboardOverview() {
                     value={card.timeRange}
                     onChange={(e: any) => card.setTimeRange(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
-                    className="text-[11px] font-semibold bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg px-2 py-1 outline-none cursor-pointer"
+                    className="text-[11px] font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-md px-2 py-0.5 outline-none cursor-pointer transition-colors"
                   >
                     <option value="today">Today</option>
-                    <option value="week">Last Week</option>
-                    <option value="month">Last Month</option>
-                    <option value="year">This Year</option>
-                    <option value="all">All Time</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                    <option value="year">Year</option>
+                    <option value="all">All</option>
                   </select>
                 )}
               </div>
 
-              <div 
-                onClick={() => setActiveModal(card.id)} 
-                className="cursor-pointer my-2"
-              >
-                <h3 className="text-3xl font-extrabold text-slate-900">{loading ? '...' : card.value}</h3>
+              <div className="my-0.5">
+                <h3 className="text-[28px] font-bold text-slate-900 tracking-tight leading-none">{loading ? '...' : card.value}</h3>
               </div>
 
-              <div 
-                onClick={() => setActiveModal(card.id)}
-                className="mt-2 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 group-hover:text-blue-600 font-medium cursor-pointer"
-              >
+              <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[12px] text-blue-600 font-semibold group-hover:text-blue-700 transition-colors">
                 <span>{card.subtitle}</span>
-                <ArrowUpRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 text-blue-600" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-blue-600 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </div>
             </div>
           );
         })}
       </div>
 
+      {/* Assigned Partner Onboarding Tasks Widget (Only visible if assigned partners exist) */}
+      {(() => {
+        if (currentUser?.is_partner) return null;
+
+        const assignedPartners = usersList.filter((u: any) => {
+          if (!u.is_partner) return false;
+          return u.assigned_employee_id === currentUser?.id;
+        });
+
+        if (assignedPartners.length === 0) return null;
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <Store className="w-4 h-4 text-blue-600" />
+                  Assigned Channel Partner Onboarding Workflows ({assignedPartners.length})
+                </h3>
+                <p className="text-[12px] text-slate-500 font-medium mt-0.5">
+                  High Priority onboarding tasks assigned to you. Click to upload documents and complete onboarding.
+                </p>
+              </div>
+
+              <Link
+                href="/dashboard/partners"
+                className="text-[12px] font-bold text-blue-600 hover:underline flex items-center gap-1"
+              >
+                <span>View All Partners</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {assignedPartners.map((partner: any) => (
+                <div key={partner.id} className="p-3.5 rounded-lg bg-blue-50/40 border border-blue-200/60 flex flex-col justify-between gap-3 hover:border-blue-400 transition-all">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[13px] font-bold text-slate-900">{partner.full_name}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{partner.email}</div>
+                    </div>
+
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                      {partner.account_name || 'Marketplace'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-blue-200/40">
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-600 font-semibold">
+                      <Clock className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Stage: <strong className="text-blue-900">{partner.onboarding_status || 'Draft'}</strong></span>
+                    </div>
+
+                    <Link
+                      href={`/dashboard/partners/${partner.id}`}
+                      className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-semibold transition-all flex items-center gap-1"
+                    >
+                      <span>Complete Onboarding</span>
+                      <ArrowUpRight className="w-3 h-3" />
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MY ASSIGNED TASK TICKETS LIST (Only if tasks exist) */}
+      {!isPartner && tasksList.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h3 className="text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <CheckSquare className="w-4 h-4 text-blue-600" />
+                My Assigned Task Tickets ({tasksList.length})
+              </h3>
+              <p className="text-[12px] text-slate-500 font-medium mt-0.5">
+                Live tasks and onboarding tickets assigned to you by administrators.
+              </p>
+            </div>
+
+            <Link
+              href="/dashboard/tasks"
+              className="text-[12px] font-semibold text-blue-600 hover:underline flex items-center gap-1"
+            >
+              <span>Open Tasks Portal</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-200 rounded-lg">
+            <table className="w-full text-left text-[12px]">
+              <thead>
+                <tr className="bg-slate-50/80 text-slate-600 font-bold uppercase border-b border-slate-200 text-[11px]">
+                  <th className="py-2.5 px-3">Ticket ID</th>
+                  <th className="py-2.5 px-3">Task Title</th>
+                  <th className="py-2.5 px-3">Priority</th>
+                  <th className="py-2.5 px-3">Status</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-800">
+                {tasksList.map((task: any) => (
+                  <tr key={task.id} className="hover:bg-slate-50/80">
+                    <td className="py-2.5 px-3 font-mono font-bold text-blue-600">{task.ticket_code}</td>
+                    <td className="py-2.5 px-3 font-semibold text-slate-900">{task.title}</td>
+                    <td className="py-2.5 px-3">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${task.priority === 'High' || task.priority === 'Urgent'
+                        ? 'bg-red-50 text-red-700 border border-red-200'
+                        : 'bg-blue-50 text-blue-700 border border-blue-200'
+                        }`}>
+                        {task.priority}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-[11px]">
+                        {task.status}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      <Link
+                        href="/dashboard/tasks"
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md text-[11px] inline-flex items-center gap-1"
+                      >
+                        <span>View Ticket</span>
+                        <ArrowUpRight className="w-3 h-3" />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ========================================================================= */}
       {/* 1. SUPERADMIN DASHBOARD ALL-IN-ONE PANELS */}
       {/* ========================================================================= */}
-      {currentDashboard === 'superadmin' && (
+      {(currentUser?.is_admin || roleName === 'Super Admin') && (
         <div className="space-y-8">
           {/* SECTION A: ORDERS OVERVIEW TABLE */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="card-premium p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                   <ShoppingCart className="w-5 h-5 text-blue-600" />
                   Sales Orders & Account Activity ({displayOrders.length})
                 </h2>
-                <p className="text-xs text-slate-500">Live customer order list</p>
+                <p className="text-sm text-slate-600 font-medium">Live customer order list</p>
               </div>
 
               <div className="flex items-center gap-3">
                 {/* Orders Time Range Selector */}
-                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                  <Filter className="w-3.5 h-3.5 text-slate-500 ml-1.5" />
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+                  <Filter className="w-4 h-4 text-slate-600 ml-1.5" />
                   <select
                     value={ordersTimeRange}
                     onChange={(e: any) => setOrdersTimeRange(e.target.value)}
-                    className="text-xs font-semibold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
+                    className="text-xs font-bold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
                   >
                     <option value="today">Today</option>
                     <option value="week">Last Week</option>
@@ -378,9 +543,9 @@ export default function DashboardOverview() {
 
                 <a
                   href="/dashboard/orders"
-                  className="text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors shadow-xs"
+                  className="btn-primary"
                 >
-                  Manage Orders &rarr;
+                  Manage Orders
                 </a>
               </div>
             </div>
@@ -390,7 +555,7 @@ export default function DashboardOverview() {
                 No orders found for <strong className="uppercase">{ordersTimeRange}</strong>. Change filter above.
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <div className="table-container border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 text-xs font-semibold uppercase tracking-wider">
@@ -410,16 +575,15 @@ export default function DashboardOverview() {
                         <td className="py-3.5 px-4 font-semibold text-slate-900">{ord.buyer_name}</td>
                         <td className="py-3.5 px-4 text-slate-700">{ord.product_name}</td>
                         <td className="py-3.5 px-4 font-semibold text-slate-900">{ord.qty}</td>
-                        <td className="py-3.5 px-4 font-bold text-emerald-700">${((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
+                        <td className="py-3.5 px-4 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
                         <td className="py-3.5 px-4 text-xs font-semibold text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                        <td className="py-3.5 px-4">
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            ord.status === 'Ready for Shipment'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : ord.status === 'Pending Review' || ord.status === 'Make a Purchase'
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${ord.status === 'Ready for Shipment'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : ord.status === 'Pending Review' || ord.status === 'Pending Procurement'
                               ? 'bg-amber-50 text-amber-700 border border-amber-200'
                               : 'bg-blue-50 text-blue-700 border border-blue-200'
-                          }`}>
+                            }`}>
                             {ord.status}
                           </span>
                         </td>
@@ -439,17 +603,17 @@ export default function DashboardOverview() {
                   <ShoppingBag className="w-5 h-5 text-amber-600" />
                   Pending Purchases & Product Procurement ({pendingReviewOrdersList.length})
                 </h2>
-                <p className="text-xs text-slate-500">Orders requiring supplier purchase, quantities, and costs</p>
+                <p className="text-sm text-slate-600 font-medium">Orders requiring supplier purchase, quantities, and costs</p>
               </div>
 
               <div className="flex items-center gap-3">
                 {/* Purchases Time Range Selector */}
-                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                  <Filter className="w-3.5 h-3.5 text-slate-500 ml-1.5" />
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+                  <Filter className="w-4 h-4 text-slate-600 ml-1.5" />
                   <select
                     value={purchasesTimeRange}
                     onChange={(e: any) => setPurchasesTimeRange(e.target.value)}
-                    className="text-xs font-semibold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
+                    className="text-xs font-bold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
                   >
                     <option value="today">Today</option>
                     <option value="week">Last Week</option>
@@ -461,9 +625,9 @@ export default function DashboardOverview() {
 
                 <a
                   href="/dashboard/purchases"
-                  className="text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors shadow-xs"
+                  className="btn-primary"
                 >
-                  Manage Purchases &rarr;
+                  Manage Purchases
                 </a>
               </div>
             </div>
@@ -473,14 +637,14 @@ export default function DashboardOverview() {
                 No orders waiting for purchase for <strong className="uppercase">{purchasesTimeRange}</strong>
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <div className="table-container border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-semibold uppercase tracking-wider">
                       <th className="py-3 px-3">Order #</th>
                       <th className="py-3 px-3">Product Required</th>
                       <th className="py-3 px-3">Required Qty</th>
-                      <th className="py-3 px-3">Unit Price ($)</th>
+                      <th className="py-3 px-3">Unit Price (₹)</th>
                       <th className="py-3 px-3">Total Purchase Cost</th>
                       <th className="py-3 px-3">Source Account</th>
                       <th className="py-3 px-3">Status</th>
@@ -492,8 +656,8 @@ export default function DashboardOverview() {
                         <td className="py-2.5 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
                         <td className="py-2.5 px-3 font-bold text-slate-900">{ord.product_name}</td>
                         <td className="py-2.5 px-3 font-bold text-amber-700">{ord.qty} units</td>
-                        <td className="py-2.5 px-3 text-slate-700">${(ord.product_price || 0).toFixed(2)}</td>
-                        <td className="py-2.5 px-3 font-bold text-emerald-700">${((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
+                        <td className="py-2.5 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
                         <td className="py-2.5 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
                         <td className="py-2.5 px-3 font-semibold text-amber-700">{ord.status}</td>
                       </tr>
@@ -518,7 +682,7 @@ export default function DashboardOverview() {
                 </a>
               </div>
 
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <div className="table-container border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
@@ -535,11 +699,10 @@ export default function DashboardOverview() {
                         <tr key={item.id} className="hover:bg-slate-50">
                           <td className="py-2 px-3 font-semibold text-slate-900">{item.product_name}</td>
                           <td className="py-2 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
-                          <td className="py-2 px-3 font-semibold text-emerald-700">${item.price.toFixed(2)}</td>
-                          <td className="py-2 px-3">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              isLow ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}>
+                          <td className="py-2 px-3 font-semibold text-emerald-700">₹{item.price.toFixed(2)}</td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap shrink-0 ${isLow ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}>
                               {isLow ? 'Low Stock' : 'Stock OK'}
                             </span>
                           </td>
@@ -558,7 +721,7 @@ export default function DashboardOverview() {
                   <Truck className="w-5 h-5 text-purple-600" />
                   Shipment Dispatches ({displayShipments.length})
                 </h2>
-                
+
                 <div className="flex items-center gap-2">
                   <select
                     value={shipmentsTimeRange}
@@ -614,20 +777,20 @@ export default function DashboardOverview() {
       {/* ========================================================================= */}
       {/* 2. PURCHASE DEPARTMENT DASHBOARD VIEW */}
       {/* ========================================================================= */}
-      {currentDashboard === 'purchase' && (
+      {(currentUser?.is_admin || roleName === 'Purchase Manager' || currentDashboard === 'purchase') && !['Inventory Manager', 'Shipment Manager'].includes(roleName) && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Orders Needing Purchase ({purchasesTimeRange.toUpperCase()})</div>
-              <div className="text-3xl font-bold text-amber-600 mt-2">{pendingReviewOrdersList.length}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Orders Needing Purchase ({purchasesTimeRange.toUpperCase()})</div>
+              <div className="text-4xl font-extrabold text-amber-600 mt-2">{pendingReviewOrdersList.length}</div>
             </div>
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Supplier Purchases ({purchasesTimeRange.toUpperCase()})</div>
-              <div className="text-3xl font-bold text-slate-900 mt-2">{displayPurchases.length}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Supplier Purchases ({purchasesTimeRange.toUpperCase()})</div>
+              <div className="text-4xl font-extrabold text-slate-900 mt-2">{displayPurchases.length}</div>
             </div>
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Low Stock Products</div>
-              <div className="text-3xl font-bold text-red-600 mt-2">{lowStockCount}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Low Stock Products</div>
+              <div className="text-4xl font-extrabold text-red-600 mt-2">{lowStockCount}</div>
             </div>
           </div>
 
@@ -639,24 +802,24 @@ export default function DashboardOverview() {
                   <ShoppingBag className="w-5 h-5 text-amber-600" />
                   Product Quantity & Purchase Cost Requirements
                 </h2>
-                <p className="text-xs text-slate-500">Products, quantities, unit prices, and supplier cost</p>
+                <p className="text-sm text-slate-500 font-medium">Products, quantities, unit prices, and supplier cost</p>
               </div>
               <a
                 href="/dashboard/purchases"
-                className="text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors shadow-xs"
+                className="btn-primary"
               >
-                Go to Purchases Dept &rarr;
+                Go to Purchases Dept
               </a>
             </div>
 
             <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-xs">
+              <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-semibold uppercase tracking-wider">
+                  <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-bold uppercase tracking-wider">
                     <th className="py-3 px-3">Order #</th>
                     <th className="py-3 px-3">Product Name</th>
                     <th className="py-3 px-3">Qty Required</th>
-                    <th className="py-3 px-3">Unit Price ($)</th>
+                    <th className="py-3 px-3">Unit Price (₹)</th>
                     <th className="py-3 px-3">Total Purchase Cost</th>
                     <th className="py-3 px-3">Account Source</th>
                     <th className="py-3 px-3">Status</th>
@@ -665,13 +828,13 @@ export default function DashboardOverview() {
                 <tbody className="divide-y divide-slate-100 text-slate-800">
                   {pendingReviewOrdersList.map((ord: any) => (
                     <tr key={ord.id} className="hover:bg-amber-50/30">
-                      <td className="py-2.5 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
-                      <td className="py-2.5 px-3 font-bold text-slate-900">{ord.product_name}</td>
-                      <td className="py-2.5 px-3 font-bold text-amber-700">{ord.qty} units</td>
-                      <td className="py-2.5 px-3 text-slate-700">${(ord.product_price || 0).toFixed(2)}</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-700">${((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                      <td className="py-2.5 px-3 font-semibold text-amber-700">{ord.status}</td>
+                      <td className="py-3 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-900">{ord.product_name}</td>
+                      <td className="py-3 px-3 font-bold text-amber-700">{ord.qty} units</td>
+                      <td className="py-3 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
+                      <td className="py-3 px-3 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
+                      <td className="py-3 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
+                      <td className="py-3 px-3 font-semibold text-amber-700">{ord.status}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -684,20 +847,20 @@ export default function DashboardOverview() {
       {/* ========================================================================= */}
       {/* 3. SHIPMENT DEPARTMENT DASHBOARD VIEW */}
       {/* ========================================================================= */}
-      {currentDashboard === 'shipment' && (
+      {(currentUser?.is_admin || roleName === 'Shipment Manager' || currentDashboard === 'shipment') && !['Inventory Manager', 'Purchase Manager'].includes(roleName) && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Orders Ready for Dispatch ({ordersTimeRange.toUpperCase()})</div>
-              <div className="text-3xl font-bold text-purple-600 mt-2">{readyForShipmentOrdersList.length}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Orders Ready for Dispatch ({ordersTimeRange.toUpperCase()})</div>
+              <div className="text-4xl font-extrabold text-purple-600 mt-2">{readyForShipmentOrdersList.length}</div>
             </div>
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">In-Transit Dispatches ({shipmentsTimeRange.toUpperCase()})</div>
-              <div className="text-3xl font-bold text-blue-600 mt-2">{displayShipments.filter((s: any) => s.status !== 'Delivered').length}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">In-Transit Dispatches ({shipmentsTimeRange.toUpperCase()})</div>
+              <div className="text-4xl font-extrabold text-blue-600 mt-2">{displayShipments.filter((s: any) => s.status !== 'Delivered').length}</div>
             </div>
             <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Total Delivered Shipments</div>
-              <div className="text-3xl font-bold text-emerald-600 mt-2">{displayShipments.filter((s: any) => s.status === 'Delivered').length}</div>
+              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Total Delivered Shipments</div>
+              <div className="text-4xl font-extrabold text-emerald-600 mt-2">{displayShipments.filter((s: any) => s.status === 'Delivered').length}</div>
             </div>
           </div>
 
@@ -748,13 +911,74 @@ export default function DashboardOverview() {
           </div>
         </div>
       )}
+      {/* ========================================================================= */}
+      {/* 4. INVENTORY MANAGER DASHBOARD VIEW */}
+      {/* ========================================================================= */}
+      {roleName === 'Inventory Manager' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Package className="w-5 h-5 text-emerald-600" />
+                  Inventory Product Stock List ({inventoryList.length})
+                </h2>
+                <p className="text-xs text-slate-500">Live catalog, quantities, and stock alerts</p>
+              </div>
+              <a href="/dashboard/inventory" className="btn-primary">
+                Manage Inventory
+              </a>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
+                    <th className="py-2.5 px-3">Product Name</th>
+                    <th className="py-2.5 px-3">SKU</th>
+                    <th className="py-2.5 px-3">Stock Qty</th>
+                    <th className="py-2.5 px-3">Price</th>
+                    <th className="py-2.5 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {inventoryList.map((item: any) => {
+                    const isLow = item.stock_quantity <= 5;
+                    const isOut = item.stock_quantity === 0;
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-3 font-semibold text-slate-900">{item.product_name}</td>
+                        <td className="py-2.5 px-3 font-mono text-blue-600">{item.sku || '—'}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
+                        <td className="py-2.5 px-3 font-semibold text-emerald-700">${item.price.toFixed(2)}</td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap shrink-0 ${isOut ? 'bg-red-50 text-red-700 border border-red-200' : isLow ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            }`}>
+                            {isOut ? 'Out of Stock' : isLow ? 'Low Stock' : 'Stock OK'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 1. TOTAL ORDERS MODAL (WITH TIME FILTER & ACCOUNT BREAKDOWN) */}
       {/* ========================================================================= */}
       {activeModal === 'orders' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-4xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -824,7 +1048,7 @@ export default function DashboardOverview() {
                           {data.count} Order(s)
                         </span>
                         <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200">
-                          ${data.totalRevenue.toFixed(2)} Total Value
+                          ₹{data.totalRevenue.toFixed(2)} Total Value
                         </span>
                       </div>
                     </div>
@@ -849,7 +1073,7 @@ export default function DashboardOverview() {
                               <td className="py-2 px-3 font-semibold text-slate-900">{ord.buyer_name}</td>
                               <td className="py-2 px-3 text-slate-700">{ord.product_name}</td>
                               <td className="py-2 px-3 font-bold">{ord.qty}</td>
-                              <td className="py-2 px-3 font-semibold text-emerald-700">${((ord.product_price || 0) * ord.qty).toFixed(2)}</td>
+                              <td className="py-2 px-3 font-semibold text-emerald-700">₹{((ord.product_price || 0) * ord.qty).toFixed(2)}</td>
                               <td className="py-2 px-3">
                                 <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                                   {ord.status}
@@ -865,7 +1089,15 @@ export default function DashboardOverview() {
               )}
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/orders"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Full Orders Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
@@ -881,8 +1113,14 @@ export default function DashboardOverview() {
       {/* 2. PENDING PURCHASES MODAL (WITH TIME FILTER & PRODUCT REQUIREMENT) */}
       {/* ========================================================================= */}
       {activeModal === 'purchases' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-4xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -952,7 +1190,7 @@ export default function DashboardOverview() {
                         <th className="py-3 px-3">Order #</th>
                         <th className="py-3 px-3">Product Required</th>
                         <th className="py-3 px-3">Required Qty</th>
-                        <th className="py-3 px-3">Unit Price ($)</th>
+                        <th className="py-3 px-3">Unit Price (₹)</th>
                         <th className="py-3 px-3">Total Purchase Cost</th>
                         <th className="py-3 px-3">Source Account</th>
                         <th className="py-3 px-3">Status</th>
@@ -968,8 +1206,8 @@ export default function DashboardOverview() {
                             <td className="py-2.5 px-3 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block my-1">
                               {ord.qty} units
                             </td>
-                            <td className="py-2.5 px-3 text-slate-700">${(ord.product_price || 0).toFixed(2)}</td>
-                            <td className="py-2.5 px-3 font-bold text-emerald-700">${totalCost.toFixed(2)}</td>
+                            <td className="py-2.5 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
+                            <td className="py-2.5 px-3 font-bold text-emerald-700">₹{totalCost.toFixed(2)}</td>
                             <td className="py-2.5 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
                             <td className="py-2.5 px-3 font-semibold text-amber-700">{ord.status}</td>
                           </tr>
@@ -1010,7 +1248,7 @@ export default function DashboardOverview() {
                           <td className="py-2.5 px-3 font-mono font-medium text-blue-600">#ORD-{pur.order_id}</td>
                           <td className="py-2.5 px-3 font-semibold text-slate-900">{pur.product_name}</td>
                           <td className="py-2.5 px-3 font-bold">{pur.qty}</td>
-                          <td className="py-2.5 px-3 font-semibold text-emerald-700">${pur.purchase_value.toFixed(2)}</td>
+                          <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{pur.purchase_value.toFixed(2)}</td>
                           <td className="py-2.5 px-3 text-slate-600">{pur.estimated_shipment_date || 'TBD'}</td>
                           <td className="py-2.5 px-3 text-slate-500">{pur.account_name || 'N/A'}</td>
                           <td className="py-2.5 px-3 font-semibold text-emerald-700">{pur.status}</td>
@@ -1022,7 +1260,15 @@ export default function DashboardOverview() {
               )}
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/purchases"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Full Purchases Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
@@ -1038,8 +1284,14 @@ export default function DashboardOverview() {
       {/* 3. INVENTORY STOCK MODAL */}
       {/* ========================================================================= */}
       {activeModal === 'inventory' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-3xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-3xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -1062,7 +1314,7 @@ export default function DashboardOverview() {
                   <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
                     <th className="py-3 px-3">Product Name</th>
                     <th className="py-3 px-3">Current Stock Qty</th>
-                    <th className="py-3 px-3">Unit Price ($)</th>
+                    <th className="py-3 px-3">Unit Price (₹)</th>
                     <th className="py-3 px-3">Stock Status</th>
                   </tr>
                 </thead>
@@ -1073,14 +1325,13 @@ export default function DashboardOverview() {
                       <tr key={item.id} className="hover:bg-slate-50">
                         <td className="py-2.5 px-3 font-semibold text-slate-900">{item.product_name}</td>
                         <td className="py-2.5 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
-                        <td className="py-2.5 px-3 font-semibold text-emerald-700">${item.price.toFixed(2)}</td>
-                        <td className="py-2.5 px-3">
+                        <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{item.price.toFixed(2)}</td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
                           <span
-                            className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${
-                              isLow
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            }`}
+                            className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap shrink-0 ${isLow
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              }`}
                           >
                             {isLow ? 'Low Stock Warning' : 'Sufficient Stock'}
                           </span>
@@ -1092,7 +1343,15 @@ export default function DashboardOverview() {
               </table>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/inventory"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Full Inventory Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
@@ -1108,8 +1367,14 @@ export default function DashboardOverview() {
       {/* 4. SHIPMENTS TRACKED MODAL (WITH TIME FILTER) */}
       {/* ========================================================================= */}
       {activeModal === 'shipments' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-4xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -1181,7 +1446,7 @@ export default function DashboardOverview() {
                       <td className="py-2.5 px-3 font-mono font-semibold text-purple-700">{ship.tracking_id}</td>
                       <td className="py-2.5 px-3 text-slate-700">{ship.product_name}</td>
                       <td className="py-2.5 px-3 text-slate-600">{ship.weight} kg</td>
-                      <td className="py-2.5 px-3 font-semibold text-emerald-700">${ship.shipment_cost.toFixed(2)}</td>
+                      <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{ship.shipment_cost.toFixed(2)}</td>
                       <td className="py-2.5 px-3 font-bold text-purple-700">{ship.status}</td>
                     </tr>
                   ))}
@@ -1189,7 +1454,15 @@ export default function DashboardOverview() {
               </table>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/shipments"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Full Shipments Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
@@ -1205,8 +1478,14 @@ export default function DashboardOverview() {
       {/* 5. TEAM EMPLOYEES MODAL */}
       {/* ========================================================================= */}
       {activeModal === 'employees' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-2xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-2xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -1252,7 +1531,15 @@ export default function DashboardOverview() {
               </table>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/employees"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Employees Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
@@ -1268,8 +1555,14 @@ export default function DashboardOverview() {
       {/* 6. REGISTERED ACCOUNTS MODAL */}
       {/* ========================================================================= */}
       {activeModal === 'accounts' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-2xl rounded-2xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        <div
+          onClick={() => setActiveModal(null)}
+          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-content bg-white border border-surface-200 w-full max-w-2xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -1309,7 +1602,15 @@ export default function DashboardOverview() {
               </table>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <Link
+                href="/dashboard/accounts"
+                onClick={() => setActiveModal(null)}
+                className="btn-primary text-xs"
+              >
+                <span>View Accounts Page</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"

@@ -18,6 +18,12 @@ class UserCreate(BaseModel):
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
+    responsibilities: Optional[str] = None
+    assigned_employee_id: Optional[int] = None
+    assigned_employee_name: Optional[str] = None
+    onboarding_status: Optional[str] = "Draft"
+    requires_shipping: Optional[bool] = True
+    shipping_partner: Optional[str] = "FedEx Express"
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
@@ -35,6 +41,12 @@ class UserUpdate(BaseModel):
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
+    responsibilities: Optional[str] = None
+    assigned_employee_id: Optional[int] = None
+    assigned_employee_name: Optional[str] = None
+    onboarding_status: Optional[str] = None
+    requires_shipping: Optional[bool] = None
+    shipping_partner: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: int
@@ -46,6 +58,11 @@ class UserResponse(BaseModel):
     is_partner: bool = False
     account_id: Optional[int] = None
     account_name: Optional[str] = None
+    assigned_employee_id: Optional[int] = None
+    assigned_employee_name: Optional[str] = None
+    onboarding_status: Optional[str] = "Draft"
+    requires_shipping: Optional[bool] = True
+    shipping_partner: Optional[str] = None
     role_id: Optional[int] = None
     role: Optional[RoleResponse] = None
     personal_details: Optional[str] = None
@@ -53,6 +70,7 @@ class UserResponse(BaseModel):
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
+    responsibilities: Optional[str] = None
     created_at: datetime
 
     class Config:

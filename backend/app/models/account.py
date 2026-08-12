@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from datetime import datetime
 from app.database import Base
 
@@ -13,5 +13,10 @@ class Account(Base):
     ifsc_code = Column(String(20), nullable=True)
     branch_name = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
+
+    # Dynamic document requirements & shipping defaults
+    required_documents = Column(Text, nullable=True) # JSON array string of required doc objects
+    shipping_enabled = Column(Boolean, default=True)
+    default_shipping_partner = Column(String(100), nullable=True, default="FedEx Express")
 
     created_at = Column(DateTime, default=datetime.utcnow)

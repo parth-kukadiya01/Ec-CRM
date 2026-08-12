@@ -53,6 +53,9 @@ def get_me(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "is_admin": current_user.is_admin,
+        "is_partner": current_user.is_partner or False,
+        "account_id": current_user.account_id,
+        "account_name": current_user.account_name,
         "role_name": role_name,
         "permissions": permissions
     }

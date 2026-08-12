@@ -1,14 +1,17 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { ordersApi, inventoryApi, accountsApi, purchasesApi, shipmentsApi } from '@/lib/api';
+import { ordersApi, inventoryApi, accountsApi, purchasesApi, shipmentsApi, authApi } from '@/lib/api';
 import SearchableSelect from '@/components/SearchableSelect';
-import { ShoppingCart, Plus, Truck, ShoppingBag, CheckCircle2, AlertTriangle, Image as ImageIcon, Percent, DollarSign, Edit2, Trash2 } from 'lucide-react';
+import ResizableTable from '@/components/ResizableTable';
+import { ShoppingCart, Plus, Truck, ShoppingBag, CheckCircle2, AlertTriangle, Image as ImageIcon, Edit2, Trash2, ShieldAlert } from 'lucide-react';
+import { hasPermission } from '@/lib/permissions';
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [inventoryList, setInventoryList] = useState<any[]>([]);
   const [accountsList, setAccountsList] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   // Modals state
@@ -49,7 +52,7 @@ export default function OrdersPage() {
     account_name: '',
   });
 
-  // Commission Type and Value state (Default: percent)
+  // Commission Type and Value state
   const [commissionType, setCommissionType] = useState<'percent' | 'amount'>('percent');
   const [commissionVal, setCommissionVal] = useState<number>(0);
 
@@ -67,6 +70,9 @@ export default function OrdersPage() {
 
   // Shipment Form
   const [shipmentForm, setShipmentForm] = useState({
+    order_id: 0,
+    order_number: '',
+    product_name: '',
     shipment_partner: 'FedEx Express',
     tracking_id: '',
     weight: 1.5,
@@ -79,9 +85,11 @@ export default function OrdersPage() {
       const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
       const invRes = await inventoryApi.list().catch(() => ({ data: [] }));
       const accRes = await accountsApi.list().catch(() => ({ data: [] }));
+      const meRes = await authApi.getMe().catch(() => ({ data: null }));
       setOrders(ordRes.data || []);
       setInventoryList(invRes.data || []);
       setAccountsList(accRes.data || []);
+      setCurrentUser(meRes?.data || null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -136,7 +144,6 @@ export default function OrdersPage() {
         commission_price: parseFloat(calculatedCommissionPrice.toFixed(2)) || 0,
       });
       setShowAddModal(false);
-      // Reset commission inputs
       setCommissionType('percent');
       setCommissionVal(0);
       loadData();
@@ -183,7 +190,7 @@ export default function OrdersPage() {
   };
 
   const handleDeleteOrder = async (id: number) => {
-    if (confirm('Are you sure you want to delete this order?')) {
+    if (confirm('Delete this order?')) {
       try {
         await ordersApi.delete(id);
         loadData();
@@ -261,7 +268,7 @@ export default function OrdersPage() {
   const productOptions = inventoryList.map((item) => ({
     value: item.id,
     label: item.product_name,
-    sublabel: `Price: $${item.price} | Stock: ${item.stock_quantity} units`,
+    sublabel: `Price: ₹${item.price} | Stock: ${item.stock_quantity} units`,
   }));
 
   const accountOptions = accountsList.map((acc) => ({
@@ -270,243 +277,314 @@ export default function OrdersPage() {
     sublabel: `Type: ${acc.account_type} | Bank: ${acc.bank_name || 'N/A'}`,
   }));
 
+  const openAddOrderModal = () => {
+    const userAccount = currentUser?.account_name
+      ? accountsList.find(acc => acc.account_name === currentUser.account_name || acc.id === currentUser.account_id)
+      : null;
+    setOrderForm({
+      order_date: new Date().toISOString().split('T')[0],
+      last_shipment_date: '',
+      product_id: '',
+      product_name: '',
+      qty: 1,
+      product_price: 0,
+      product_image: '',
+      shipment_address_1: '',
+      shipment_address_2: '',
+      buyer_name: '',
+      mobile_number: '',
+      account_id: userAccount ? String(userAccount.id) : (currentUser?.account_id ? String(currentUser.account_id) : ''),
+      account_name: userAccount ? userAccount.account_name : (currentUser?.account_name || ''),
+    });
+    setCommissionType('percent');
+    setCommissionVal(0);
+    setShowAddModal(true);
+  };
+
+  const isPartner = currentUser?.is_partner || currentUser?.role_name === 'Channel Partner';
+  const roleName = currentUser?.role_name || (currentUser?.is_admin ? 'Super Admin' : 'Employee');
+  const isAllowed = hasPermission(currentUser, 'orders:read');
+  const canWrite = hasPermission(currentUser, 'orders:write');
+
+  if (!loading && currentUser && !isAllowed) {
+    return (
+      <div className="py-16 text-center card-premium p-8 max-w-lg mx-auto mt-10">
+        <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3" />
+        <h2 className="text-lg font-bold text-surface-900">Access Restricted</h2>
+        <p className="text-xs text-surface-500 mt-1">
+          Your role (<strong className="text-surface-700">{roleName || 'Employee'}</strong>) is restricted to your specific department.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            <ShoppingCart className="w-7 h-7 text-blue-600" />
-            Add & Manage Orders
+          <h1 className="text-xl font-bold text-surface-900 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
+              <ShoppingCart className="w-4 h-4" />
+            </div>
+            Orders Management
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Create sales orders, check automated stock status, dispatch shipments or generate procurement purchases</p>
+          <p className="text-xs text-surface-400 mt-0.5">Sales order processing, inventory checks, and shipping dispatches</p>
         </div>
         <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-sm rounded-xl shadow-md shadow-blue-500/20 transition-all"
+          onClick={openAddOrderModal}
+          className="btn-primary"
         >
           <Plus className="w-4 h-4" />
-          <span>Add New Order</span>
+          <span>Add Order</span>
         </button>
       </div>
 
       {/* Orders Table */}
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+      <div className="card-premium overflow-hidden">
         {loading ? (
-          <div className="py-12 text-center text-slate-400 text-sm">Loading sales orders...</div>
+          <div className="py-12 text-center">
+            <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+            <span className="text-xs text-surface-400">Loading sales orders...</span>
+          </div>
         ) : orders.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 text-sm">No orders recorded yet. Click "Add New Order" to begin.</div>
+          <div className="py-12 text-center">
+            <ShoppingCart className="w-10 h-10 text-surface-300 mx-auto mb-2" />
+            <p className="text-xs text-surface-400">No orders recorded yet. Click "Add Order" to begin.</p>
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          <div className="table-container">
+            <ResizableTable className="w-full text-left text-sm">
               <thead>
-                <tr className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                  <th className="py-3.5 px-4">Order #</th>
-                  <th className="py-3.5 px-4">Date</th>
-                  <th className="py-3.5 px-4">Buyer & Mobile</th>
-                  <th className="py-3.5 px-4">Product & Price</th>
-                  <th className="py-3.5 px-4">Commission</th>
-                  <th className="py-3.5 px-4">Account Source</th>
-                  <th className="py-3.5 px-4">Stock Status</th>
-                  <th className="py-3.5 px-4 text-center">Action Flow</th>
-                  <th className="py-3.5 px-4 text-right">Actions</th>
+                <tr className="bg-slate-50/80 text-slate-600 text-[11px] font-bold uppercase tracking-wider border-b border-slate-200">
+                  <th className="py-3 px-4">Order #</th>
+                  <th className="py-3 px-4">Date</th>
+                  <th className="py-3 px-4">Buyer</th>
+                  <th className="py-3 px-4">Product</th>
+                  <th className="py-3 px-4 text-center">Qty</th>
+                  <th className="py-3 px-4">Unit Price</th>
+                  <th className="py-3 px-4 font-bold">Total Price</th>
+                  <th className="py-3 px-4">Comm.</th>
+                  <th className="py-3 px-4">Account</th>
+                  <th className="py-3 px-4 whitespace-nowrap">Status</th>
+                  <th className="py-3 px-4 text-center">Action Flow</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-800">
+              <tbody className="divide-y divide-surface-100">
                 {orders.map((ord) => {
                   const isPendingReview = ord.status === 'Pending Review';
                   const isReady = ord.status === 'Ready for Shipment';
-                  const isNeedPurchase = ord.status === 'Make a Purchase' || ord.status === 'Out of Stock';
+                  const isNeedPurchase = ord.status === 'Pending Procurement' || ord.status === 'Out of Stock';
                   const isPurchased = ord.status === 'Purchased';
                   const isShipped = ord.status === 'Shipped';
                   const isDelivered = ord.status === 'Delivered';
 
                   return (
                     <tr key={ord.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-medium text-blue-600">
+                      <td className="py-3 px-4 font-mono font-semibold text-blue-600 whitespace-nowrap">
                         {ord.order_number}
                         {ord.product_image && (
-                          <span className="ml-2 inline-block text-slate-400 hover:text-blue-600" title="Has Image">
+                          <span className="ml-1.5 inline-block text-slate-400 hover:text-blue-600" title="Has Image">
                             <ImageIcon className="w-3.5 h-3.5 inline" />
                           </span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-xs text-slate-500">{ord.order_date}</td>
-                      <td className="py-3.5 px-4">
-                        <div className="font-semibold text-slate-900">{ord.buyer_name}</div>
-                        <div className="text-xs text-slate-500">{ord.mobile_number}</div>
+                      <td className="py-3 px-4 text-xs text-slate-600 font-medium whitespace-nowrap">{ord.order_date}</td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <div className="font-bold text-slate-900">{ord.buyer_name}</div>
+                        <div className="text-xs text-slate-500 font-medium">{ord.mobile_number}</div>
                       </td>
-                      <td className="py-3.5 px-4">
-                        <div className="font-medium text-slate-800">{ord.product_name} <span className="text-xs text-slate-500">(x{ord.qty})</span></div>
-                        <div className="text-xs text-emerald-700 font-semibold">${(ord.product_price * ord.qty).toFixed(2)}</div>
+                      <td className="py-3 px-4 font-semibold text-slate-900 whitespace-nowrap max-w-xs truncate">
+                        {ord.product_name}
                       </td>
-                      <td className="py-3.5 px-4 text-xs font-semibold text-blue-700">
-                        ${(ord.commission_price || 0).toFixed(2)}
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 font-mono font-bold text-slate-800 text-xs">
+                          {ord.qty}
+                        </span>
                       </td>
-                      <td className="py-3.5 px-4 text-xs font-medium text-slate-600">{ord.account_name || 'Direct Admin'}</td>
-                      <td className="py-3.5 px-4">
+                      <td className="py-3 px-4 text-slate-700 font-medium whitespace-nowrap text-xs">
+                        ₹{(ord.product_price || 0).toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-emerald-700 whitespace-nowrap text-xs">
+                        ₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-700">
+                        ₹{(ord.commission_price || 0).toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4 text-xs font-medium text-surface-600 whitespace-nowrap">{ord.account_name || 'Direct'}</td>
+                      <td className="py-3 px-4 whitespace-nowrap">
                         <span
-                          className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 ${
-                            isReady
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${isReady
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/80'
                               : isPendingReview || isNeedPurchase
-                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                              : isShipped || isDelivered
-                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                              : 'bg-purple-50 text-purple-700 border border-purple-200'
-                          }`}
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                                : isShipped || isDelivered
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200/80'
+                                  : 'bg-purple-50 text-purple-700 border border-purple-200/80'
+                            }`}
                         >
                           {isReady && <CheckCircle2 className="w-3.5 h-3.5" />}
                           {(isPendingReview || isNeedPurchase) && <AlertTriangle className="w-3.5 h-3.5" />}
-                          {isPendingReview ? 'Pending Purchase Review' : ord.status}
+                          {isPendingReview ? 'Pending Review' : ord.status}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 text-center">
-                        {isPendingReview && (
-                          <a
-                            href="/dashboard/purchases"
-                            className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs rounded-xl inline-flex items-center gap-1 transition-all"
-                          >
-                            <ShoppingBag className="w-3.5 h-3.5 text-amber-600" />
-                            <span>In Purchase Dept Review</span>
-                          </a>
-                        )}
-                        {isReady && (
-                          <button
-                            onClick={() => openShipmentModal(ord)}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all"
-                          >
-                            <Truck className="w-3.5 h-3.5" />
-                            <span>Dispatch Shipment</span>
-                          </button>
-                        )}
-                        {isNeedPurchase && (
-                          <button
-                            onClick={() => openPurchaseModal(ord)}
-                            className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 transition-all"
-                          >
-                            <ShoppingBag className="w-3.5 h-3.5" />
-                            <span>Make a Purchase</span>
-                          </button>
-                        )}
-                        {isPurchased && (
-                          <span className="text-xs text-purple-700 font-semibold italic">Procurement Purchase Created</span>
-                        )}
-                        {isShipped && (
-                          <span className="text-xs text-blue-700 font-semibold italic">Shipped</span>
-                        )}
-                        {isDelivered && (
-                          <span className="text-xs text-emerald-700 font-semibold italic">Delivered</span>
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        {isPartner ? (
+                          <span className="text-xs font-semibold text-slate-600 italic">{ord.status}</span>
+                        ) : (
+                          <>
+                            {isPendingReview && (
+                              <a
+                                href="/dashboard/purchases"
+                                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 font-semibold text-xs rounded-lg inline-flex items-center gap-1 transition-all"
+                              >
+                                <ShoppingBag className="w-3.5 h-3.5 text-amber-600" />
+                                <span>In Review</span>
+                              </a>
+                            )}
+                            {isReady && (
+                              <button
+                                onClick={() => openShipmentModal(ord)}
+                                className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-xs inline-flex items-center gap-1 transition-all"
+                              >
+                                <Truck className="w-3.5 h-3.5" />
+                                <span>Dispatch</span>
+                              </button>
+                            )}
+                            {isNeedPurchase && (
+                              <button
+                                onClick={() => openPurchaseModal(ord)}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-lg shadow-xs inline-flex items-center gap-1 transition-all"
+                              >
+                                <ShoppingBag className="w-3.5 h-3.5" />
+                                <span>Create PO</span>
+                              </button>
+                            )}
+                            {isPurchased && (
+                              <span className="text-xs text-purple-700 font-semibold italic">Purchased</span>
+                            )}
+                            {isShipped && (
+                              <span className="text-xs text-blue-600 font-semibold italic">Shipped</span>
+                            )}
+                            {isDelivered && (
+                              <span className="text-xs text-emerald-600 font-semibold italic">Delivered</span>
+                            )}
+                          </>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-right space-x-2">
-                        <button
-                          onClick={() => openEditModal(ord)}
-                          className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="Edit Order"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteOrder(ord.id)}
-                          className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-red-600 hover:bg-red-50 transition-colors"
-                          title="Delete Order"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        {!isPartner && (
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => openEditModal(ord)}
+                              className="p-1.5 rounded-md text-surface-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
+                              title="Edit"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteOrder(ord.id)}
+                              className="p-1.5 rounded-md text-surface-400 hover:text-red-600 hover:bg-red-50 transition-all"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
-            </table>
+            </ResizableTable>
           </div>
         )}
       </div>
 
       {/* Add Order Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-2xl rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <ShoppingCart className="w-6 h-6 text-blue-600" />
-              Create Sales Order
-            </h2>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-xl rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <ShoppingCart className="w-4 h-4 text-blue-600" />
+                Add Sales Order
+              </h2>
+            </div>
 
-            <form onSubmit={handleCreateOrder} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleCreateOrder} className="p-5 space-y-3.5 max-h-[75vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order Date *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Order Date *</label>
                   <input
                     type="date"
                     required
                     value={orderForm.order_date}
                     onChange={(e) => setOrderForm({ ...orderForm, order_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Last Shipment Date</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Last Shipment Date</label>
                   <input
                     type="date"
                     value={orderForm.last_shipment_date}
                     onChange={(e) => setOrderForm({ ...orderForm, last_shipment_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
-              {/* Product Selection with Search */}
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name (Searchable Dropdown) *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product *</label>
                 <SearchableSelect
                   options={productOptions}
                   value={orderForm.product_id}
                   onChange={handleProductSelect}
-                  placeholder="Search and select product from inventory..."
+                  placeholder="Select product..."
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Quantity *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Qty *</label>
                   <input
                     type="number"
                     min="1"
                     required
                     value={orderForm.qty}
                     onChange={(e) => setOrderForm({ ...orderForm, qty: parseInt(e.target.value) || 1 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Product Unit Price ($) *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={orderForm.product_price}
                     onChange={(e) => setOrderForm({ ...orderForm, product_price: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
 
-                {/* Commission input with Percent % and Flat Amount $ options */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 flex items-center justify-between">
                     <span>Commission</span>
-                    <span className="text-[11px] text-blue-700 font-mono font-medium">
-                      Calc: ${calculatedCommissionPrice.toFixed(2)}
+                    <span className="text-xs text-blue-600 font-mono font-bold">
+                      ₹{calculatedCommissionPrice.toFixed(2)}
                     </span>
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex gap-1.5">
                     <select
                       value={commissionType}
                       onChange={(e) => setCommissionType(e.target.value as 'percent' | 'amount')}
-                      className="bg-white border border-slate-300 rounded-lg px-2.5 py-2.5 text-xs text-slate-900 font-semibold focus:outline-none focus:border-blue-600 shrink-0"
+                      className="bg-white rounded-lg px-2 py-2 text-xs text-surface-900 font-semibold input-premium shrink-0"
                     >
-                      <option value="percent">% Percent</option>
-                      <option value="amount">$ Amount</option>
+                      <option value="percent">%</option>
+                      <option value="amount">₹</option>
                     </select>
                     <input
                       type="number"
@@ -514,94 +592,100 @@ export default function OrdersPage() {
                       min="0"
                       value={commissionVal}
                       onChange={(e) => setCommissionVal(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                      placeholder={commissionType === 'percent' ? 'e.g. 5%' : 'e.g. 10.00'}
+                      className="w-full bg-white rounded-lg py-2 px-2.5 text-sm text-surface-900 input-premium"
+                      placeholder="0"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Account Selection with Search */}
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Select Account / Channel (Searchable Dropdown)</label>
-                <SearchableSelect
-                  options={accountOptions}
-                  value={orderForm.account_id}
-                  onChange={handleAccountSelect}
-                  placeholder="Select which partner/store account received this order..."
-                />
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Account</label>
+                {(currentUser?.is_partner || currentUser?.account_name) && !currentUser?.is_admin ? (
+                  <div className="w-full bg-surface-100 border border-surface-200 rounded-lg py-2 px-3 text-sm font-medium text-surface-800 flex items-center justify-between">
+                    <span>{orderForm.account_name || currentUser.account_name || 'My Channel Account'}</span>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded bg-blue-50 text-blue-700">Channel Partner Account</span>
+                  </div>
+                ) : (
+                  <SearchableSelect
+                    options={accountOptions}
+                    value={orderForm.account_id}
+                    onChange={handleAccountSelect}
+                    placeholder="Select account..."
+                  />
+                )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Buyer Name *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Buyer Name *</label>
                   <input
                     type="text"
                     required
                     value={orderForm.buyer_name}
                     onChange={(e) => setOrderForm({ ...orderForm, buyer_name: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Mobile Number *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Mobile Number *</label>
                   <input
                     type="text"
                     required
                     value={orderForm.mobile_number}
                     onChange={(e) => setOrderForm({ ...orderForm, mobile_number: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Shipment Address 1 *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Shipment Address 1 *</label>
                 <input
                   type="text"
                   required
                   value={orderForm.shipment_address_1}
                   onChange={(e) => setOrderForm({ ...orderForm, shipment_address_1: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                  placeholder="Street address, building, suite..."
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
+                  placeholder="Street address..."
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Shipment Address 2</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Shipment Address 2</label>
                 <input
                   type="text"
                   value={orderForm.shipment_address_2}
                   onChange={(e) => setOrderForm({ ...orderForm, shipment_address_2: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                  placeholder="City, State, Zipcode..."
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
+                  placeholder="City, state, zip..."
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Image URL</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product Image URL</label>
                 <input
                   type="text"
                   value={orderForm.product_image}
                   onChange={(e) => setOrderForm({ ...orderForm, product_image: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                  placeholder="https://example.com/product.jpg"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
+                  placeholder="https://..."
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="btn-primary"
                 >
-                  Create Order & Check Stock
+                  Create Order
                 </button>
               </div>
             </form>
@@ -609,101 +693,98 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* Make a Purchase Modal */}
+      {/* Pending Procurement Modal */}
       {showPurchaseModal && selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-lg rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <ShoppingBag className="w-6 h-6 text-amber-600" />
-              Make a Procurement Purchase
-            </h2>
-            <p className="text-xs text-slate-500">
-              Create supplier purchase order for missing inventory stock
-            </p>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-md rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <ShoppingBag className="w-4 h-4 text-amber-600" />
+                Make Purchase
+              </h2>
+            </div>
 
-            <form onSubmit={handleCreatePurchase} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleCreatePurchase} className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Purchase Order ID *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">PO ID *</label>
                   <input
                     type="text"
                     required
                     value={purchaseForm.order_number}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, order_number: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 font-mono font-medium focus:outline-none focus:border-amber-600"
-                    placeholder="Enter Purchase Order ID..."
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 font-mono input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order Date *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Date *</label>
                   <input
                     type="date"
                     required
                     value={purchaseForm.order_date}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, order_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product *</label>
                 <input
                   type="text"
                   required
                   value={purchaseForm.product_name}
                   onChange={(e) => setPurchaseForm({ ...purchaseForm, product_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Purchase Value ($) *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Value (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={purchaseForm.purchase_value}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Estimated Delivery Date</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Est. Delivery</label>
                   <input
                     type="date"
                     value={purchaseForm.estimated_shipment_date}
                     onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Account / Supplier Name</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Supplier</label>
                 <input
                   type="text"
                   value={purchaseForm.account_name}
                   onChange={(e) => setPurchaseForm({ ...purchaseForm, account_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-amber-600"
-                  placeholder="e.g. Supplier Vendor Account"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowPurchaseModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-lg transition-all"
                 >
-                  Submit Purchase Entry
+                  Submit Purchase
                 </button>
               </div>
             </form>
@@ -713,100 +794,102 @@ export default function OrdersPage() {
 
       {/* Edit Order Modal */}
       {showEditModal && editingOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <Edit2 className="w-6 h-6 text-blue-600" />
-              Edit Order ({editingOrder.order_number})
-            </h2>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-md rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-blue-600" />
+                Edit Order ({editingOrder.order_number})
+              </h2>
+            </div>
 
-            <form onSubmit={handleUpdateOrder} className="space-y-4">
+            <form onSubmit={handleUpdateOrder} className="p-5 space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Buyer Name</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Buyer Name</label>
                 <input
                   type="text"
                   required
                   value={editOrderForm.buyer_name}
                   onChange={(e) => setEditOrderForm({ ...editOrderForm, buyer_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Mobile Number</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Mobile</label>
                 <input
                   type="text"
                   required
                   value={editOrderForm.mobile_number}
                   onChange={(e) => setEditOrderForm({ ...editOrderForm, mobile_number: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product</label>
                 <input
                   type="text"
                   required
                   value={editOrderForm.product_name}
                   onChange={(e) => setEditOrderForm({ ...editOrderForm, product_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Quantity</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Qty</label>
                   <input
                     type="number"
                     required
                     value={editOrderForm.qty}
                     onChange={(e) => setEditOrderForm({ ...editOrderForm, qty: parseInt(e.target.value) || 1 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Price ($)</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Price (₹)</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={editOrderForm.product_price}
                     onChange={(e) => setEditOrderForm({ ...editOrderForm, product_price: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Status</label>
                 <select
                   value={editOrderForm.status}
                   onChange={(e) => setEditOrderForm({ ...editOrderForm, status: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 >
                   <option value="Pending Review">Pending Review</option>
                   <option value="Ready for Shipment">Ready for Shipment</option>
-                  <option value="Make a Purchase">Make a Purchase</option>
+                  <option value="Pending Procurement">Pending Procurement</option>
                   <option value="Purchased">Purchased</option>
                   <option value="Shipped">Shipped</option>
                   <option value="Delivered">Delivered</option>
                 </select>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowEditModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="btn-primary"
                 >
-                  Save Order Changes
+                  Save
                 </button>
               </div>
             </form>
@@ -816,102 +899,101 @@ export default function OrdersPage() {
 
       {/* Shipment Modal */}
       {showShipmentModal && selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-lg rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <Truck className="w-6 h-6 text-emerald-600" />
-              Dispatch Shipment
-            </h2>
-            <p className="text-xs text-slate-500">
-              Dispatching order for buyer <strong className="text-slate-900">{selectedOrder.buyer_name}</strong>
-            </p>
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+          <div className="modal-content bg-white border border-surface-200 w-full max-w-md rounded-xl shadow-modal overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+              <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
+                <Truck className="w-4 h-4 text-blue-600" />
+                Dispatch Shipment
+              </h2>
+            </div>
 
-            <form onSubmit={handleCreateShipment} className="space-y-4">
+            <form onSubmit={handleCreateShipment} className="p-5 space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Order ID *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Order # *</label>
                 <input
                   type="text"
                   required
                   value={shipmentForm.order_number}
                   onChange={(e) => setShipmentForm({ ...shipmentForm, order_number: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 font-mono font-medium focus:outline-none focus:border-emerald-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 font-mono input-premium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Shipment Partner *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Carrier *</label>
                   <input
                     type="text"
                     required
                     value={shipmentForm.shipment_partner}
                     onChange={(e) => setShipmentForm({ ...shipmentForm, shipment_partner: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-emerald-600"
-                    placeholder="e.g. FedEx Express, DHL, UPS"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
+                    placeholder="FedEx, DHL..."
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Tracking ID *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Tracking ID *</label>
                   <input
                     type="text"
                     required
                     value={shipmentForm.tracking_id}
                     onChange={(e) => setShipmentForm({ ...shipmentForm, tracking_id: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-emerald-600 font-mono"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 font-mono input-premium"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Product Name *</label>
+                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Product *</label>
                 <input
                   type="text"
                   required
                   value={shipmentForm.product_name}
                   onChange={(e) => setShipmentForm({ ...shipmentForm, product_name: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-emerald-600"
+                  className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Weight (kg) *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Weight (kg)</label>
                   <input
                     type="number"
                     step="0.1"
                     required
                     value={shipmentForm.weight}
                     onChange={(e) => setShipmentForm({ ...shipmentForm, weight: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-emerald-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Shipment Cost ($) *</label>
+                  <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wider mb-1">Cost (₹)</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={shipmentForm.shipment_cost}
                     onChange={(e) => setShipmentForm({ ...shipmentForm, shipment_cost: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm text-slate-900 focus:outline-none focus:border-emerald-600"
+                    className="w-full bg-white rounded-lg py-2 px-3 text-sm text-surface-900 input-premium"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-surface-100">
                 <button
                   type="button"
                   onClick={() => setShowShipmentModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs text-surface-500 hover:text-surface-800 font-medium transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-xs"
+                  className="btn-primary"
                 >
-                  Dispatch Shipment
+                  Dispatch
                 </button>
               </div>
             </form>

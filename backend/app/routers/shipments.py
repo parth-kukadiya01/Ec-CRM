@@ -1,33 +1,66 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, check_permission
 from app.models.shipment import Shipment
 from app.models.order import Order
 from app.models.inventory import Inventory
 from app.models.user import User
 from app.schemas.shipment import ShipmentCreate, ShipmentUpdate, ShipmentResponse
 
+from sqlalchemy import or_
+
 router = APIRouter(prefix="/shipments", tags=["Shipments"])
 
 @router.get("", response_model=List[ShipmentResponse])
 def list_shipments(
+    skip: Optional[int] = Query(None, ge=0, description="Number of items to skip"),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Max items to return"),
+    page: Optional[int] = Query(None, ge=1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(None, ge=1, le=1000, description="Items per page"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("shipments:read"))
 ):
     query = db.query(Shipment)
-    if not current_user.is_admin and current_user.account_name:
-        partner_order_ids = [o.id for o in db.query(Order).filter(Order.account_name == current_user.account_name).all()]
+    is_partner_user = current_user.is_partner or (current_user.role and current_user.role.name == "Channel Partner")
+
+    if not current_user.is_admin and is_partner_user:
+        filters = []
+        if current_user.account_id:
+            filters.append(Order.account_id == current_user.account_id)
+        if current_user.account_name:
+            filters.append(Order.account_name == current_user.account_name)
+        filters.append(Order.account_id == current_user.id)
+        if current_user.full_name:
+            filters.append(Order.account_name == current_user.full_name)
+
+        partner_orders = db.query(Order).filter(or_(*filters)).all()
+        partner_order_ids = [o.id for o in partner_orders]
         query = query.filter(Shipment.order_id.in_(partner_order_ids))
-    return query.order_by(Shipment.created_at.desc()).all()
+
+    query = query.order_by(Shipment.created_at.desc())
+
+    if page is not None and page_size is not None:
+        skip = (page - 1) * page_size
+        limit = page_size
+    if skip is not None:
+        query = query.offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+
+    return query.all()
 
 @router.post("", response_model=ShipmentResponse)
 def create_shipment(
     ship_in: ShipmentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("shipments:write"))
 ):
+    is_shipment_manager = current_user.is_admin or (current_user.role and current_user.role.name == "Shipment Manager")
+    if not is_shipment_manager:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Shipment Manager has dispatch and write access to shipments.")
+
     order = db.query(Order).filter(Order.id == ship_in.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Associated Order not found")
@@ -56,8 +89,12 @@ def update_shipment(
     shipment_id: int,
     ship_in: ShipmentUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("shipments:write"))
 ):
+    is_shipment_manager = current_user.is_admin or (current_user.role and current_user.role.name == "Shipment Manager")
+    if not is_shipment_manager:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Shipment Manager has dispatch and write access to shipments.")
+
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
@@ -85,8 +122,12 @@ def update_shipment(
 def delete_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("shipments:write"))
 ):
+    is_shipment_manager = current_user.is_admin or (current_user.role and current_user.role.name == "Shipment Manager")
+    if not is_shipment_manager:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Shipment Manager has dispatch and write access to shipments.")
+
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")

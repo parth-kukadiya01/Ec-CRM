@@ -1,9 +1,9 @@
 from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, check_permission
 from app.models.purchase import Purchase
 from app.models.order import Order
 from app.models.inventory import Inventory
@@ -14,19 +14,34 @@ router = APIRouter(prefix="/purchases", tags=["Purchases"])
 
 @router.get("", response_model=List[PurchaseResponse])
 def list_purchases(
+    skip: Optional[int] = Query(None, ge=0, description="Number of items to skip"),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Max items to return"),
+    page: Optional[int] = Query(None, ge=1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(None, ge=1, le=1000, description="Items per page"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("purchases:read"))
 ):
     query = db.query(Purchase)
-    if not current_user.is_admin and current_user.account_name:
+    if not current_user.is_admin and current_user.is_partner and current_user.account_name:
         query = query.filter(Purchase.account_name == current_user.account_name)
-    return query.order_by(Purchase.created_at.desc()).all()
+    
+    query = query.order_by(Purchase.created_at.desc())
+
+    if page is not None and page_size is not None:
+        skip = (page - 1) * page_size
+        limit = page_size
+    if skip is not None:
+        query = query.offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+
+    return query.all()
 
 @router.post("", response_model=PurchaseResponse)
 def create_purchase(
     pur_in: PurchaseCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("purchases:write"))
 ):
     order = db.query(Order).filter(Order.id == pur_in.order_id).first()
     if not order:
@@ -56,7 +71,7 @@ def update_purchase(
     purchase_id: int,
     pur_in: PurchaseUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("purchases:write"))
 ):
     purchase = db.query(Purchase).filter(Purchase.id == purchase_id).first()
     if not purchase:
@@ -74,7 +89,7 @@ def update_purchase(
         previous_status = purchase.status
         purchase.status = pur_in.status
 
-        if pur_in.status == "Received" and previous_status != "Received":
+        if ("Received" in pur_in.status) and ("Received" not in (previous_status or "")):
             order = db.query(Order).filter(Order.id == purchase.order_id).first()
             if order:
                 # Update inventory stock
@@ -98,7 +113,7 @@ def update_purchase(
                     order.product_id = inv.id
 
                 # Now order has enough stock
-                order.status = "Ready for Shipment"
+                order.status = "Ready to Ship"
 
     db.commit()
     db.refresh(purchase)
@@ -108,7 +123,7 @@ def update_purchase(
 def delete_purchase(
     purchase_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(check_permission("purchases:write"))
 ):
     purchase = db.query(Purchase).filter(Purchase.id == purchase_id).first()
     if not purchase:

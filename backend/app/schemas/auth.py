@@ -14,6 +14,9 @@ class UserAuthResponse(BaseModel):
     email: str
     full_name: str
     is_admin: bool
+    is_partner: bool = False
+    account_id: Optional[int] = None
+    account_name: Optional[str] = None
     role_name: Optional[str] = None
     permissions: List[str] = []
 

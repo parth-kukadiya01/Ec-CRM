@@ -9,6 +9,9 @@ class InventoryBase(BaseModel):
     sku: Optional[str] = None
     category: Optional[str] = None
     other_details: Optional[str] = None
+    partner_id: Optional[int] = None
+    partner_name: Optional[str] = None
+    image_url: Optional[str] = None
 
 class InventoryCreate(InventoryBase):
     pass
@@ -20,10 +23,13 @@ class InventoryUpdate(BaseModel):
     sku: Optional[str] = None
     category: Optional[str] = None
     other_details: Optional[str] = None
+    partner_id: Optional[int] = None
+    partner_name: Optional[str] = None
+    image_url: Optional[str] = None
 
 class InventoryResponse(InventoryBase):
     id: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -13,4 +13,8 @@ class Inventory(Base):
     category = Column(String(100), nullable=True)
     other_details = Column(Text, nullable=True) # Additional specifications/stock details
 
+    partner_id = Column(Integer, nullable=True, index=True)
+    partner_name = Column(String(200), nullable=True)
+    image_url = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)

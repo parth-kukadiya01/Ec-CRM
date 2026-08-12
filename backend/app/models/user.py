@@ -17,10 +17,15 @@ class User(Base):
 
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="SET NULL"), nullable=True)
 
-    # Partner / Account linking
+    # Partner / Account linking & Onboarding Assignment
     is_partner = Column(Boolean, default=False)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     account_name = Column(String(100), nullable=True)
+    assigned_employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    assigned_employee_name = Column(String(100), nullable=True)
+    onboarding_status = Column(String(50), default="Draft") # Draft, Documents Submitted, Under Verification, Approved & Active
+    requires_shipping = Column(Boolean, default=True)
+    shipping_partner = Column(String(100), nullable=True, default="FedEx Express")
 
     # Employee specific details
     personal_details = Column(Text, nullable=True) # Address, DOB, gender, etc.
@@ -28,6 +33,7 @@ class User(Base):
     account_number = Column(String(50), nullable=True)
     ifsc_code = Column(String(20), nullable=True)
     salary_summary = Column(Text, nullable=True) # Base salary, allowances, etc.
+    responsibilities = Column(Text, nullable=True) # Key job duties & responsibilities
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

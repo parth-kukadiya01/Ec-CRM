@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
-from app.core.deps import get_current_user, get_current_admin
+from app.core.deps import get_current_user, get_current_admin, check_permission
 from app.models.role import Role
 from app.models.permission import Permission
 from app.models.user import User
@@ -28,7 +28,7 @@ def list_roles(
 def create_role(
     role_in: RoleCreate,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
+    current_user: User = Depends(check_permission("roles:manage"))
 ):
     existing = db.query(Role).filter(Role.name == role_in.name).first()
     if existing:
@@ -49,7 +49,7 @@ def update_role(
     role_id: int,
     role_in: RoleUpdate,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
+    current_user: User = Depends(check_permission("roles:manage"))
 ):
     role = db.query(Role).filter(Role.id == role_id).first()
     if not role:
@@ -71,7 +71,7 @@ def update_role(
 def delete_role(
     role_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
+    current_user: User = Depends(check_permission("roles:manage"))
 ):
     role = db.query(Role).filter(Role.id == role_id).first()
     if not role:

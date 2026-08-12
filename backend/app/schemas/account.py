@@ -10,6 +10,9 @@ class AccountBase(BaseModel):
     ifsc_code: Optional[str] = None
     branch_name: Optional[str] = None
     notes: Optional[str] = None
+    required_documents: Optional[str] = None
+    shipping_enabled: Optional[bool] = True
+    default_shipping_partner: Optional[str] = "FedEx Express"
 
 class AccountCreate(AccountBase):
     pass
@@ -22,6 +25,9 @@ class AccountUpdate(BaseModel):
     ifsc_code: Optional[str] = None
     branch_name: Optional[str] = None
     notes: Optional[str] = None
+    required_documents: Optional[str] = None
+    shipping_enabled: Optional[bool] = None
+    default_shipping_partner: Optional[str] = None
 
 class AccountResponse(AccountBase):
     id: int
