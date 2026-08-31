@@ -57,5 +57,6 @@ def get_me(current_user: User = Depends(get_current_user)):
         "account_id": current_user.account_id,
         "account_name": current_user.account_name,
         "role_name": role_name,
-        "permissions": permissions
+        "permissions": permissions,
+        "allowed_companies": current_user.allowed_companies
     }

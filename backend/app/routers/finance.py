@@ -32,7 +32,7 @@ def _get_date_filter(period: str) -> Optional[date]:
 
 @router.get("/summary")
 def get_finance_summary(
-    period: str = Query("all", regex="^(today|week|month|year|all)$"),
+    period: str = Query("all", pattern="^(today|week|month|year|all)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin),
 ):
@@ -45,11 +45,11 @@ def get_finance_summary(
     # ── Revenue from Orders ──
     orders_query = db.query(Order)
     if start_date:
-        orders_query = orders_query.filter(Order.order_date >= start_date)
+        orders_query = orders_query.filter(func.coalesce(Order.order_process_date, Order.order_date) >= start_date)
     orders = orders_query.all()
 
-    total_revenue = sum((o.product_price or 0) * (o.qty or 1) for o in orders)
-    total_commission = sum((o.commission_price or 0) * (o.qty or 1) for o in orders)
+    total_revenue = sum(((o.price_usd or o.product_price or 0.0) * (o.qty or 1)) for o in orders)
+    total_commission = sum((o.commission_price or 0.0) * (o.qty or 1) for o in orders)
     total_orders_count = len(orders)
 
     # ── Purchases (COGS) ──
@@ -116,7 +116,7 @@ def get_finance_summary(
 
 @router.get("/breakdown")
 def get_finance_breakdown(
-    period: str = Query("all", regex="^(today|week|month|year|all)$"),
+    period: str = Query("all", pattern="^(today|week|month|year|all)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin),
 ):
@@ -129,16 +129,16 @@ def get_finance_breakdown(
     # ── Revenue by Account / Marketplace ──
     orders_query = db.query(Order)
     if start_date:
-        orders_query = orders_query.filter(Order.order_date >= start_date)
+        orders_query = orders_query.filter(func.coalesce(Order.order_process_date, Order.order_date) >= start_date)
     orders = orders_query.all()
 
     revenue_by_account = {}
     for o in orders:
-        acc = o.account_name or "Direct / Unlinked"
+        acc = o.account_name or o.seller_account or o.company or "Direct / Unlinked"
         if acc not in revenue_by_account:
             revenue_by_account[acc] = {"revenue": 0, "commission": 0, "orders": 0}
-        revenue_by_account[acc]["revenue"] += (o.product_price or 0) * (o.qty or 1)
-        revenue_by_account[acc]["commission"] += (o.commission_price or 0) * (o.qty or 1)
+        revenue_by_account[acc]["revenue"] += (o.price_usd or o.product_price or 0.0) * (o.qty or 1)
+        revenue_by_account[acc]["commission"] += (o.commission_price or 0.0) * (o.qty or 1)
         revenue_by_account[acc]["orders"] += 1
 
     revenue_by_account_list = [
@@ -204,11 +204,12 @@ def get_finance_breakdown(
         month_end_dt = datetime.combine(month_end, datetime.max.time())
 
         # Monthly revenue
+        order_date_col = func.coalesce(Order.order_process_date, Order.order_date)
         month_orders = db.query(Order).filter(
-            Order.order_date >= month_start,
-            Order.order_date <= month_end
+            order_date_col >= month_start,
+            order_date_col <= month_end
         ).all()
-        month_revenue = sum((o.product_price or 0) * (o.qty or 1) for o in month_orders)
+        month_revenue = sum(((o.price_usd or o.product_price or 0.0) * (o.qty or 1)) for o in month_orders)
 
         # Monthly purchases
         month_purchases = db.query(Purchase).filter(
@@ -240,7 +241,7 @@ def get_finance_breakdown(
         pname = o.product_name or "Unknown"
         if pname not in product_revenue:
             product_revenue[pname] = {"revenue": 0, "qty": 0}
-        product_revenue[pname]["revenue"] += (o.product_price or 0) * (o.qty or 1)
+        product_revenue[pname]["revenue"] += (o.price_usd or o.product_price or 0.0) * (o.qty or 1)
         product_revenue[pname]["qty"] += (o.qty or 1)
 
     top_products = [

@@ -19,6 +19,7 @@ class UserCreate(BaseModel):
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
     responsibilities: Optional[str] = None
+    allowed_companies: Optional[str] = None
     assigned_employee_id: Optional[int] = None
     assigned_employee_name: Optional[str] = None
     onboarding_status: Optional[str] = "Draft"
@@ -42,6 +43,7 @@ class UserUpdate(BaseModel):
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
     responsibilities: Optional[str] = None
+    allowed_companies: Optional[str] = None
     assigned_employee_id: Optional[int] = None
     assigned_employee_name: Optional[str] = None
     onboarding_status: Optional[str] = None
@@ -71,6 +73,7 @@ class UserResponse(BaseModel):
     ifsc_code: Optional[str] = None
     salary_summary: Optional[str] = None
     responsibilities: Optional[str] = None
+    allowed_companies: Optional[str] = None
     created_at: datetime
 
     class Config:

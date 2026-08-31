@@ -1,6 +1,40 @@
 import axios from 'axios';
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
+// When running in the browser, using the relative proxy path '/backend-api' guarantees
+// that all requests route through Next.js server to the backend without CORS or localhost issues from remote devices.
+export const getBaseApiUrl = () => {
+  if (typeof window !== 'undefined') {
+    if (process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PUBLIC_API_URL.includes('127.0.0.1') && !process.env.NEXT_PUBLIC_API_URL.includes('localhost')) {
+      return process.env.NEXT_PUBLIC_API_URL;
+    }
+    return '/backend-api';
+  }
+  return process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1';
+};
+
+export const API_BASE = getBaseApiUrl();
+
+export const getBackendBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  return 'http://127.0.0.1:8000';
+};
+
+export const getImageUrl = (url?: string | null) => {
+  if (!url) return '';
+  // S3 URLs and data URIs pass through directly
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+    return url;
+  }
+  // Relative paths (e.g. /uploads/file.jpg) use the current origin in browser
+  // or the backend base URL on the server
+  if (typeof window !== 'undefined') {
+    return url.startsWith('/') ? url : `/${url}`;
+  }
+  const backendBase = process.env.INTERNAL_BACKEND_URL || 'http://127.0.0.1:8000';
+  return `${backendBase}${url.startsWith('/') ? '' : '/'}${url}`;
+};
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -45,6 +79,18 @@ export const inventoryApi = {
   delete: (id: number) => api.delete(`/inventory/${id}`),
 };
 
+export const uploadApi = {
+  uploadFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+};
+
 export const accountsApi = {
   list: (params?: any) => api.get('/accounts', { params: typeof params === 'string' ? { search: params } : params }),
   create: (data: any) => api.post('/accounts', data),
@@ -52,11 +98,43 @@ export const accountsApi = {
   delete: (id: number) => api.delete(`/accounts/${id}`),
 };
 
+export const adminCostsApi = {
+  list: () => api.get('/admin-costs'),
+  createOrUpdate: (data: any) => api.post('/admin-costs', data),
+  delete: (month: string) => api.delete(`/admin-costs/${month}`),
+};
+
+export const companiesApi = {
+  list: (params?: any) => api.get('/companies', { params: typeof params === 'string' ? { search: params } : params }),
+  getOne: (id: number) => api.get(`/companies/${id}`),
+  create: (data: any) => api.post('/companies', data),
+  update: (id: number, data: any) => api.put(`/companies/${id}`, data),
+  delete: (id: number) => api.delete(`/companies/${id}`),
+};
+
+export const partnersMgmtApi = {
+  list: (params?: any) => api.get('/partners-mgmt', { params: typeof params === 'string' ? { search: params } : params }),
+  getOne: (id: number) => api.get(`/partners-mgmt/${id}`),
+  create: (data: any) => api.post('/partners-mgmt', data),
+  update: (id: number, data: any) => api.put(`/partners-mgmt/${id}`, data),
+  delete: (id: number) => api.delete(`/partners-mgmt/${id}`),
+};
+
 export const ordersApi = {
   list: (params?: any) => api.get('/orders', { params }),
   getOne: (id: number) => api.get(`/orders/${id}`),
   create: (data: any) => api.post('/orders', data),
+  createBulk: (data: any[]) => api.post('/orders/bulk', data),
   update: (id: number, data: any) => api.put(`/orders/${id}`, data),
+  updateStatus: (id: number, status: string) => api.put(`/orders/${id}`, { status, order_status: status }),
+  uploadCsv: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/orders/upload-csv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  extractUrlImage: (url: string) => api.get('/orders/extract-url-image', { params: { url } }),
   delete: (id: number) => api.delete(`/orders/${id}`),
 };
 

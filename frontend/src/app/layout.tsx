@@ -2,8 +2,8 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'CRM Suite — Enterprise B2B Management Platform',
-  description: 'Enterprise-grade CRM platform with Inventory, Orders, Procurement, Shipment Tracking, Employee RBAC, and Account Management modules.',
+  title: 'RBS — Enterprise Order Management Platform',
+  description: 'Enterprise Order & Business Operations Dashboard',
 };
 
 export default function RootLayout({

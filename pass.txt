@@ -1,0 +1,8 @@
+#	Role / Access Level	Full Name	Email	Password	Allowed Modules
+1	Super Admin (Admin 1)	Admin One	admin1@crm.com	admin123	Full Access (All modules & administration)
+2	Super Admin (Admin 2)	Admin Two	admin2@crm.com	admin123	Full Access (All modules & administration)
+3	Super Admin (Primary)	Primary Admin	admin@crm.com	admin123	Full Access (All modules & administration)
+4	Orders & Purchases Only	Orders & Purchases Executive	orders.purchases@crm.com	user123	Orders & Purchases
+5	Shipments Only	Shipment Executive	shipments@crm.com	user123	Shipments
+6	Orders, Purchases & Shipments (User 1)	Fulfillment Executive 1	ops1@crm.com	user123	Orders, Purchases & Shipments (All Companies)
+7	Orders, Purchases & Shipments (User 2)	Fulfillment Executive 2	ops2@crm.com	user123	Orders, Purchases & Shipments (ADBH & Globle Only)

@@ -270,8 +270,8 @@ export default function InventoryPage() {
                   <th className="py-3 px-4">Product Name</th>
                   <th className="py-3 px-4">SKU Code</th>
                   <th className="py-3 px-4">Category</th>
-                  {!isPartner && <th className="py-3 px-4">Linked Channel Partner</th>}
-                  {!isPartner && <th className="py-3 px-4">Price</th>}
+                  {!isPartner && <th className="py-3 px-4 font-extrabold">Linked Channel Partner</th>}
+                  {!isPartner && <th className="py-3 px-4 font-extrabold">Price (INR ₹)</th>}
                   {!isPartner && <th className="py-3 px-4">Stock Level</th>}
                   {canWrite && <th className="py-3 px-4 text-right">Actions</th>}
                 </tr>
@@ -315,7 +315,7 @@ export default function InventoryPage() {
                     )}
                     {!isPartner && (
                       <td className="py-3.5 px-4 font-bold text-emerald-700">
-                        ${item.price?.toFixed(2) || '0.00'}
+                        ₹{item.price?.toFixed(2) || '0.00'}
                       </td>
                     )}
                     {!isPartner && (
@@ -469,7 +469,7 @@ export default function InventoryPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Unit Price ($) *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Unit Price (INR ₹) *</label>
                   <input
                     type="number"
                     step="0.01"

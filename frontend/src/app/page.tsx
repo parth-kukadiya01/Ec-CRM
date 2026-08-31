@@ -2,11 +2,12 @@
 
 import React, { useState } from 'react';
 import { authApi } from '@/lib/api';
+import { getDefaultRoute } from '@/lib/permissions';
 import { Lock, Mail, Zap, ArrowRight, ShieldCheck, AlertCircle, BarChart3, Package, Users, Globe, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@crm.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -21,15 +22,20 @@ export default function LoginPage() {
       const { access_token } = response.data;
       if (access_token) {
         localStorage.setItem('crm_token', access_token);
-        // Direct location navigation to guarantee immediate dashboard load
-        window.location.href = '/dashboard';
+        try {
+          const meRes = await authApi.getMe();
+          const target = getDefaultRoute(meRes.data);
+          window.location.href = target;
+        } catch {
+          window.location.href = '/dashboard';
+        }
       } else {
         setError('Login response did not contain access token');
       }
     } catch (err: any) {
       console.error(err);
       if (err.code === 'ERR_NETWORK' || err.message?.includes('Network Error')) {
-        setError('Backend server is not running on http://127.0.0.1:8000. Please start backend server.');
+        setError('Cannot connect to the backend server. Please ensure the server is running.');
       } else {
         setError(err.response?.data?.detail || 'Login failed. Please verify email and password.');
       }
@@ -61,8 +67,8 @@ export default function LoginPage() {
               <Zap className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-[18px] font-bold text-white tracking-tight">CRM Suite</h1>
-              <p className="text-[10px] text-blue-300 font-bold tracking-widest uppercase">Enterprise B2B Platform</p>
+              <h1 className="text-[18px] font-bold text-white tracking-tight">RBS Suite</h1>
+              <p className="text-[11px] text-blue-300/80 font-medium">Enterprise Order Operations Platform</p>
             </div>
           </div>
         </div>
@@ -144,7 +150,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-slate-50/80 border border-slate-200 rounded-lg py-2.5 pl-10 pr-4 text-[13px] text-slate-900 placeholder:text-slate-400 input-premium focus:bg-white"
-                  placeholder="admin@crm.com"
+                  placeholder="Enter your email"
                 />
               </div>
             </div>

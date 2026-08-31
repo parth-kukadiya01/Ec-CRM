@@ -26,29 +26,36 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
     // Capture NATURAL widths before switching to fixed layout
     const naturalWidths: number[] = [];
     ths.forEach((th) => {
-      naturalWidths.push(th.getBoundingClientRect().width);
+      naturalWidths.push(Math.max(80, th.getBoundingClientRect().width));
     });
 
     // Now apply fixed layout with captured natural widths
     table.style.tableLayout = 'fixed';
 
     ths.forEach((th, i) => {
+      const isSticky = th.classList.contains('sticky');
       th.style.width = `${naturalWidths[i]}px`;
-      th.style.minWidth = '50px';
-      th.style.position = 'relative';
-      th.style.overflow = 'hidden';
+      th.style.minWidth = isSticky ? '70px' : '60px';
+      if (!isSticky) {
+        th.style.position = 'relative';
+        th.style.overflow = 'hidden';
+      }
       th.style.textOverflow = 'ellipsis';
     });
 
-    // Apply overflow hidden to all td cells too
+    // Apply overflow hidden to non-sticky td cells
     table.querySelectorAll('td').forEach((td) => {
-      td.style.overflow = 'hidden';
+      if (!td.classList.contains('sticky')) {
+        td.style.overflow = 'hidden';
+      }
       td.style.textOverflow = 'ellipsis';
     });
 
     // Add resizer handles to all but the last th
     for (let i = 0; i < ths.length - 1; i++) {
       const th = ths[i];
+      if (th.classList.contains('sticky')) continue;
+
       const resizer = document.createElement('div');
       resizer.className = 'col-resizer';
       th.appendChild(resizer);
@@ -60,7 +67,7 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
         e.stopPropagation();
         const startX = e.clientX;
         const startWidth = th.getBoundingClientRect().width;
-        const nextStartWidth = nextTh.getBoundingClientRect().width;
+        const nextStartWidth = nextTh ? nextTh.getBoundingClientRect().width : 100;
 
         resizer.classList.add('col-resizer-active');
         document.body.style.cursor = 'col-resize';
@@ -69,9 +76,11 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
         const onMouseMove = (ev: MouseEvent) => {
           const diff = ev.clientX - startX;
           const newWidth = Math.max(50, startWidth + diff);
-          const nextNewWidth = Math.max(50, nextStartWidth - diff);
           th.style.width = `${newWidth}px`;
-          nextTh.style.width = `${nextNewWidth}px`;
+          if (nextTh && !nextTh.classList.contains('sticky')) {
+            const nextNewWidth = Math.max(50, nextStartWidth - diff);
+            nextTh.style.width = `${nextNewWidth}px`;
+          }
         };
 
         const onMouseUp = () => {
@@ -93,37 +102,15 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
   }, []);
 
   useEffect(() => {
-    // Wait for the table content to render fully before measuring
-    const timer = setTimeout(initResizers, 250);
+    const timer = setTimeout(initResizers, 200);
     return () => clearTimeout(timer);
   }, [initResizers]);
 
-  // Re-initialize when children change (data loads)
-  useEffect(() => {
-    if (isResizable) {
-      const timer = setTimeout(() => {
-        const table = tableRef.current;
-        if (!table) return;
-        const existing = table.querySelectorAll('.col-resizer');
-        if (existing.length === 0) {
-          // Reset fixed layout so we can re-measure natural widths
-          table.style.tableLayout = '';
-          table.querySelectorAll('th').forEach((th) => {
-            th.style.width = '';
-          });
-          initResizers();
-        }
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [children, isResizable, initResizers]);
-
   return (
-    <table
-      ref={tableRef}
-      className={`${className}`}
-    >
-      {children}
-    </table>
+    <div className="resizable-table-wrapper w-full overflow-x-auto">
+      <table ref={tableRef} className={`resizable-table ${className}`}>
+        {children}
+      </table>
+    </div>
   );
 }

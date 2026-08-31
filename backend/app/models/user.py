@@ -34,6 +34,7 @@ class User(Base):
     ifsc_code = Column(String(20), nullable=True)
     salary_summary = Column(Text, nullable=True) # Base salary, allowances, etc.
     responsibilities = Column(Text, nullable=True) # Key job duties & responsibilities
+    allowed_companies = Column(String(255), nullable=True) # Comma-separated allowed companies e.g. "ADBH,Globle,Global"
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

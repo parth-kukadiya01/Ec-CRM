@@ -13,6 +13,9 @@ from app.models.employee_asset import EmployeeAsset
 from app.models.employee_document import EmployeeDocument
 from app.models.expense_claim import ExpenseClaim
 from app.models.task import Task, TaskHistory
+from app.models.monthly_admin_cost import MonthlyAdminCost
+from app.models.company import Company
+from app.models.partner import Partner
 
 __all__ = [
     "Base",
@@ -31,4 +34,7 @@ __all__ = [
     "ExpenseClaim",
     "Task",
     "TaskHistory",
+    "MonthlyAdminCost",
+    "Company",
+    "Partner",
 ]

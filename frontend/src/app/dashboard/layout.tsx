@@ -34,7 +34,7 @@ export default function DashboardLayout({
             </div>
           </div>
           <div className="flex flex-col items-center gap-1">
-            <span className="text-[13px] font-semibold text-slate-700">Loading CRM Suite</span>
+            <span className="text-[13px] font-semibold text-slate-700">Loading RBS Suite</span>
             <span className="text-[11px] text-slate-400 font-medium">Initializing your workspace...</span>
           </div>
         </div>

@@ -290,7 +290,7 @@ export default function TasksPage() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-full border-3 border-blue-200 border-t-blue-600 animate-spin" />
-          <span className="text-sm text-surface-400 font-medium">Loading task & ticket portal...</span>
+          <span className="text-sm text-surface-400 font-medium">Loading task portal...</span>
         </div>
       </div>
     );
@@ -302,7 +302,7 @@ export default function TasksPage() {
         <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3" />
         <h2 className="text-lg font-bold text-surface-900">Access Restricted</h2>
         <p className="text-xs text-surface-500 mt-1">
-          Channel Partners do not have access to Task & Ticket Management.
+          Channel Partners do not have access to Task Management.
         </p>
       </div>
     );
@@ -837,6 +837,7 @@ export default function TasksPage() {
                   value={createForm.due_date}
                   onChange={(e) => setCreateForm({ ...createForm, due_date: e.target.value })}
                   className="w-full bg-white border rounded-xl py-2.5 px-3.5 text-xs text-surface-900 input-premium"
+                  min={new Date().toISOString().split('T')[0]}
                 />
               </div>
 
@@ -931,6 +932,7 @@ export default function TasksPage() {
                   value={editForm.due_date}
                   onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })}
                   className="w-full bg-white border rounded-xl py-2.5 px-3.5 text-xs text-surface-900 input-premium"
+                  min={new Date().toISOString().split('T')[0]}
                 />
               </div>
 

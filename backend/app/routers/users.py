@@ -84,7 +84,8 @@ def create_employee_user(
         account_number=user_in.account_number,
         ifsc_code=user_in.ifsc_code,
         salary_summary=user_in.salary_summary,
-        responsibilities=user_in.responsibilities
+        responsibilities=user_in.responsibilities,
+        allowed_companies=user_in.allowed_companies
     )
     db.add(user)
     db.commit()
@@ -262,6 +263,8 @@ def update_user(
             user.salary_summary = user_in.salary_summary
         if user_in.responsibilities is not None:
             user.responsibilities = user_in.responsibilities
+        if user_in.allowed_companies is not None:
+            user.allowed_companies = user_in.allowed_companies
         if user_in.password:
             user.password_hash = get_password_hash(user_in.password)
 

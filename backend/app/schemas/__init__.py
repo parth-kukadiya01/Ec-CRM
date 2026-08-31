@@ -6,6 +6,8 @@ from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse
 from app.schemas.order import OrderCreate, OrderUpdate, OrderResponse
 from app.schemas.purchase import PurchaseCreate, PurchaseUpdate, PurchaseResponse
 from app.schemas.shipment import ShipmentCreate, ShipmentUpdate, ShipmentResponse
+from app.schemas.company import CompanyCreate, CompanyUpdate, CompanyResponse
+from app.schemas.partner import PartnerCreate, PartnerUpdate, PartnerResponse
 
 __all__ = [
     "LoginRequest", "Token", "UserAuthResponse",
@@ -15,5 +17,7 @@ __all__ = [
     "AccountCreate", "AccountUpdate", "AccountResponse",
     "OrderCreate", "OrderUpdate", "OrderResponse",
     "PurchaseCreate", "PurchaseUpdate", "PurchaseResponse",
-    "ShipmentCreate", "ShipmentUpdate", "ShipmentResponse"
+    "ShipmentCreate", "ShipmentUpdate", "ShipmentResponse",
+    "CompanyCreate", "CompanyUpdate", "CompanyResponse",
+    "PartnerCreate", "PartnerUpdate", "PartnerResponse"
 ]

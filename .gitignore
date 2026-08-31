@@ -46,6 +46,7 @@ backend/__pycache__/
 crm.db
 backend/crm.db
 
+*.jpg 
 # Environment & secret files
 .env
 .env.local

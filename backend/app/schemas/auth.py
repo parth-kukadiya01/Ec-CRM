@@ -19,6 +19,7 @@ class UserAuthResponse(BaseModel):
     account_name: Optional[str] = None
     role_name: Optional[str] = None
     permissions: List[str] = []
+    allowed_companies: Optional[str] = None
 
     class Config:
         from_attributes = True

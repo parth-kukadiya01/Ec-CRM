@@ -66,22 +66,40 @@ def check_permission(permission_name: str):
             if current_user.role.permissions:
                 user_permissions = [p.name for p in current_user.role.permissions]
 
-        # Role defaults
-        if permission_name.startswith("inventory:") and role_name in ["Inventory Manager", "General Manager", "Operations Manager"]:
-            return current_user
-        if permission_name.startswith("purchases:") and role_name in ["Purchase Manager", "Inventory Manager"]:
-            return current_user
-        if permission_name.startswith("shipments:") and role_name in ["Shipment Manager", "Sales Executive", "Purchase Manager"]:
-            return current_user
-        if permission_name.startswith("orders:") and role_name in ["Purchase Manager", "Sales Executive", "Shipment Manager", "General Manager", "Operations Manager", "Channel Partner"]:
-            return current_user
-
         if "*" in user_permissions or permission_name in user_permissions:
             return current_user
 
         if ":" in permission_name:
             module, action = permission_name.split(":", 1)
-            if action == "read" and f"{module}:write" in user_permissions:
+            if action == "read" and (f"{module}:write" in user_permissions or f"{module}:delete" in user_permissions):
+                return current_user
+            if action in ["write", "delete"] and (f"{module}:write" in user_permissions or f"{module}:delete" in user_permissions):
+                return current_user
+
+        # Allow inventory read for order and purchase managers to populate product suggestions
+        if permission_name == "inventory:read":
+            if any(p in user_permissions for p in ["orders:read", "orders:write", "purchases:read", "purchases:write"]):
+                return current_user
+
+        # Allow shipment managers to read orders and purchases to load dispatch queue
+        if permission_name in ["orders:read", "purchases:read"]:
+            if any(p in user_permissions for p in ["shipments:read", "shipments:write"]):
+                return current_user
+
+        # Allow shipment managers to update order shipping status and tracking
+        if permission_name in ["orders:write", "purchases:write"]:
+            if "shipments:write" in user_permissions:
+                return current_user
+
+        # Fallback only when role has no explicit permissions configured in DB
+        if not user_permissions:
+            if permission_name.startswith("inventory:") and role_name in ["Inventory Manager", "General Manager", "Operations Manager"]:
+                return current_user
+            if permission_name.startswith("purchases:") and role_name in ["Purchase Manager"]:
+                return current_user
+            if permission_name.startswith("shipments:") and role_name in ["Shipment Manager"]:
+                return current_user
+            if permission_name.startswith("orders:") and role_name in ["Sales Executive", "General Manager", "Operations Manager", "Channel Partner"]:
                 return current_user
 
         raise HTTPException(

@@ -3,96 +3,70 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { hasPermission } from '@/lib/permissions';
 import {
   ShoppingCart,
-  Package,
   ShoppingBag,
   Truck,
-  Users,
   Building2,
-  AlertTriangle,
+  Plus,
+  RefreshCw,
+  Layers,
   ArrowUpRight,
-  Sparkles,
-  X,
+  Filter,
+  Search,
   CheckCircle2,
   Clock,
-  DollarSign,
-  Layers,
-  MapPin,
-  PackageCheck,
   ShieldCheck,
-  ChevronDown,
-  Store,
   Calendar,
-  Filter,
-  CheckSquare,
-  Plus
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw
 } from 'lucide-react';
-import { ordersApi, inventoryApi, purchasesApi, shipmentsApi, usersApi, accountsApi, authApi, tasksApi } from '@/lib/api';
+import { ordersApi, purchasesApi, shipmentsApi, accountsApi, authApi, getImageUrl } from '@/lib/api';
+import ResizableTable from '@/components/ResizableTable';
+import { hasPermission, getAllowedCompanies, getDefaultRoute } from '@/lib/permissions';
 
 export default function DashboardOverview() {
   const router = useRouter();
-  // Active Dashboard Selector: 'superadmin' | 'purchase' | 'shipment'
-  const [currentDashboard, setCurrentDashboard] = useState<'superadmin' | 'purchase' | 'shipment'>('superadmin');
-
-  // Independent Time Range Filters for each card / section (Default: 'today')
-  const [ordersTimeRange, setOrdersTimeRange] = useState<'today' | 'week' | 'month' | 'year' | 'all'>('today');
-  const [purchasesTimeRange, setPurchasesTimeRange] = useState<'today' | 'week' | 'month' | 'year' | 'all'>('today');
-  const [shipmentsTimeRange, setShipmentsTimeRange] = useState<'today' | 'week' | 'month' | 'year' | 'all'>('today');
 
   const [ordersList, setOrdersList] = useState<any[]>([]);
-  const [inventoryList, setInventoryList] = useState<any[]>([]);
   const [purchasesList, setPurchasesList] = useState<any[]>([]);
   const [shipmentsList, setShipmentsList] = useState<any[]>([]);
   const [accountsList, setAccountsList] = useState<any[]>([]);
-  const [usersList, setUsersList] = useState<any[]>([]);
-  const [tasksList, setTasksList] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Modal States
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [activeModal, setActiveModal] = useState<string | null>(null);
+  // Filter for dashboard tables
+  const [selectedCompanyFilter, setSelectedCompanyFilter] = useState<string>('All');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
 
   const loadDashboard = async () => {
     try {
       setLoading(true);
+      const meRes = await authApi.getMe().catch(() => ({ data: null }));
+      const user = meRes?.data || null;
+      setCurrentUser(user);
+
+      if (user && !hasPermission(user, 'dashboard')) {
+        const redirectPath = getDefaultRoute(user);
+        router.replace(redirectPath);
+        return;
+      }
+
       const ordersRes = await ordersApi.list().catch(() => ({ data: [] }));
-      const invRes = await inventoryApi.list().catch(() => ({ data: [] }));
       const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
       const shipRes = await shipmentsApi.list().catch(() => ({ data: [] }));
-      const usersRes = await usersApi.list().catch(() => ({ data: [] }));
       const accRes = await accountsApi.list().catch(() => ({ data: [] }));
-      const meRes = await authApi.getMe().catch(() => ({ data: null }));
-      const tasksRes = await tasksApi.list().catch(() => ({ data: [] }));
 
-      const allOrders = ordersRes.data || [];
-      const allInv = invRes.data || [];
-      const allPur = purRes.data || [];
-      const allShip = shipRes.data || [];
-      const allUsers = usersRes.data || [];
-      const allAcc = accRes.data || [];
-      const me = meRes?.data || null;
-      const allTasks = tasksRes.data || [];
-
-      setCurrentUser(me);
-
-      // Filter by partner account if user is not superadmin and has an assigned account
-      const filteredOrders = me && !me.is_admin && me.account_name
-        ? allOrders.filter((o: any) => o.account_name === me.account_name)
-        : allOrders;
-
-      const filteredPurchases = me && !me.is_admin && me.account_name
-        ? allPur.filter((p: any) => p.account_name === me.account_name)
-        : allPur;
-
-      setOrdersList(filteredOrders);
-      setInventoryList(allInv);
-      setPurchasesList(filteredPurchases);
-      setShipmentsList(allShip);
-      setUsersList(allUsers);
-      setAccountsList(allAcc);
-      setTasksList(allTasks);
+      setOrdersList(ordersRes.data || []);
+      setPurchasesList(purRes.data || []);
+      setShipmentsList(shipRes.data || []);
+      setAccountsList(accRes.data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -104,1523 +78,449 @@ export default function DashboardOverview() {
     loadDashboard();
   }, []);
 
-  // Helper to filter array items by date range
-  const filterByDateRange = (items: any[], range: string) => {
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+  // Allowed companies for current user (User 2 gets ADBH & Globle only; Admin/User 1 get all)
+  const companyOptions = getAllowedCompanies(currentUser);
 
-    return items.filter((item) => {
-      const rawDate = item.order_date || item.created_at;
-      if (!rawDate) return range === 'all';
-
-      const d = new Date(rawDate);
-      const itemDateStr = d.toISOString().split('T')[0];
-
-      if (range === 'today') {
-        return itemDateStr === todayStr;
-      }
-      if (range === 'week') {
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(now.getDate() - 7);
-        return d >= sevenDaysAgo;
-      }
-      if (range === 'month') {
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(now.getDate() - 30);
-        return d >= thirtyDaysAgo;
-      }
-      if (range === 'year') {
-        return d.getFullYear() === now.getFullYear();
-      }
-      return true; // 'all'
-    });
+  // Helper to verify if an item belongs to user allowed companies
+  const isAllowedCompany = (comp?: string) => {
+    if (!comp) return true;
+    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase());
   };
 
-  // Filtered Lists per Section
-  const displayOrders = filterByDateRange(ordersList, ordersTimeRange);
-  const displayPurchases = filterByDateRange(purchasesList, purchasesTimeRange);
-  const displayShipments = filterByDateRange(shipmentsList, shipmentsTimeRange);
-  const lowStockCount = inventoryList.filter((i: any) => i.stock_quantity <= 2).length;
-
-  const pendingReviewOrdersList = displayOrders.filter(
-    (o) => o.status === 'Pending Review' || o.status === 'Pending Procurement' || o.status === 'Backordered'
-  );
-
-  const readyForShipmentOrdersList = displayOrders.filter(
-    (o) => o.status === 'Ready to Ship'
-  );
-
-  // Group Orders by Account / Channel for the modal
-  const getOrdersByAccount = () => {
-    const map: { [key: string]: { count: number; totalRevenue: number; orders: any[] } } = {};
-
-    displayOrders.forEach((ord) => {
-      const accName = ord.account_name || 'Direct Admin Sales';
-      if (!map[accName]) {
-        map[accName] = { count: 0, totalRevenue: 0, orders: [] };
-      }
-      map[accName].count += 1;
-      map[accName].totalRevenue += (ord.product_price || 0) * (ord.qty || 1);
-      map[accName].orders.push(ord);
-    });
-
-    return map;
+  // Helper for Date Range checking
+  const isDateInRange = (dateStr?: string) => {
+    if (!dateStr) return true;
+    const d = dateStr.split('T')[0];
+    if (startDate && d < startDate) return false;
+    if (endDate && d > endDate) return false;
+    return true;
   };
 
-  // Pending Purchases Breakdown for the modal
-  const getPendingPurchasesBreakdown = () => {
-    const pendingReviewOrders = displayOrders.filter(
-      (o) => o.status === 'Pending Review' || o.status === 'Pending Procurement' || o.status === 'Backordered'
-    );
+  // Date Range and Allowed Company Filtered Lists
+  const dateFilteredOrders = ordersList
+    .filter(o => isAllowedCompany(o.company))
+    .filter(o => isDateInRange(o.order_process_date || o.order_date || o.created_at));
 
-    return {
-      pendingReviewOrders,
-      activePurchaseOrders: displayPurchases,
-    };
+  const dateFilteredPurchases = purchasesList
+    .filter(p => isAllowedCompany(p.company))
+    .filter(p => isDateInRange(p.order_date || p.created_at));
+
+  const dateFilteredShipments = shipmentsList
+    .filter(s => isDateInRange(s.created_at || s.shipment_date));
+
+  // Filtered orders for table display (Company + Date Range)
+  const displayOrders = selectedCompanyFilter === 'All'
+    ? dateFilteredOrders
+    : dateFilteredOrders.filter(o => (o.company || '').toLowerCase() === selectedCompanyFilter.toLowerCase());
+
+  // Pagination calculation
+  const totalPages = Math.max(1, Math.ceil(displayOrders.length / pageSize));
+  const paginatedOrders = displayOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  // Reset pagination on filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCompanyFilter, startDate, endDate, pageSize]);
+
+  // Company Counts (Date Filtered)
+  const getCompanyCount = (comp: string) => {
+    return dateFilteredOrders.filter(o => (o.company || '').toLowerCase() === comp.toLowerCase()).length;
   };
 
-  const roleName = currentUser?.role_name || (currentUser?.is_admin ? 'Super Admin' : '');
+  // === INR Exchange Rate ===
+  const USD_TO_INR = 85;
 
-  const allCards = [
-    {
-      id: 'orders',
-      title: ordersTimeRange === 'today' ? "Today's Orders" : `${ordersTimeRange.toUpperCase()} Orders`,
-      value: displayOrders.length,
-      subtitle: 'View Orders',
-      icon: ShoppingCart,
-      color: 'from-blue-600 to-blue-700',
-      timeRange: ordersTimeRange,
-      setTimeRange: setOrdersTimeRange,
-    },
-    {
-      id: 'purchases',
-      title: purchasesTimeRange === 'today' ? "Today's Purchases" : `${purchasesTimeRange.toUpperCase()} Purchases`,
-      value: displayPurchases.length + pendingReviewOrdersList.length,
-      subtitle: 'View Purchases',
-      icon: ShoppingBag,
-      color: 'from-blue-700 to-indigo-700',
-      timeRange: purchasesTimeRange,
-      setTimeRange: setPurchasesTimeRange,
-    },
-    {
-      id: 'inventory',
-      title: 'Inventory Stock',
-      value: inventoryList.length,
-      subtitle: lowStockCount > 0 ? `${lowStockCount} low stock alerts` : 'Stock updated',
-      icon: Package,
-      color: 'from-sky-600 to-blue-600',
-    },
-    {
-      id: 'shipments',
-      title: 'Shipments Tracked',
-      value: displayShipments.length,
-      subtitle: 'View Shipments',
-      icon: Truck,
-      color: 'from-blue-800 to-slate-800',
-      timeRange: shipmentsTimeRange,
-      setTimeRange: setShipmentsTimeRange,
-    },
-    {
-      id: 'employees',
-      title: 'Team Employees',
-      value: usersList.length,
-      subtitle: 'View Team',
-      icon: Users,
-      color: 'from-blue-500 to-indigo-600',
-    },
-    {
-      id: 'accounts',
-      title: 'Registered Accounts',
-      value: accountsList.length,
-      subtitle: 'View Accounts',
-      icon: Building2,
-      color: 'from-indigo-600 to-blue-700',
-    },
-  ];
+  // === Cost Calculations (All in INR ₹) ===
+  const totalSalesRevenue = dateFilteredOrders.reduce((sum: number, o: any) => sum + (parseFloat(o.price_usd || o.product_price || 0) * (o.qty || 1)), 0);
+  const totalPurchaseCost = dateFilteredPurchases.reduce((sum: number, p: any) => sum + (parseFloat(p.purchase_value || 0) + parseFloat(p.other_cost || 0) + parseFloat(p.extra_cost || 0)), 0);
+  const totalShipmentCost = dateFilteredShipments.reduce((sum: number, s: any) => sum + parseFloat(s.shipment_cost || 0), 0);
+  const totalOrderQty = dateFilteredOrders.reduce((sum: number, o: any) => sum + (parseInt(o.qty) || 1), 0);
+  const totalExpenses = totalPurchaseCost + totalShipmentCost;
+  const totalProfitLoss = totalSalesRevenue - totalExpenses;
 
-  const assignedPartnersCount = usersList.filter((u: any) => u.is_partner && u.assigned_employee_id === currentUser?.id).length;
+  // Status counts
+  const pendingOrders = dateFilteredOrders.filter((o: any) => !['Purchased', 'Ready to Ship', 'Shipped', 'Delivered'].includes(o.status)).length;
+  const shippedOrders = dateFilteredOrders.filter((o: any) => o.status === 'Shipped').length;
+  const deliveredOrders = dateFilteredOrders.filter((o: any) => o.status === 'Delivered').length;
 
-  const isPartner = currentUser?.is_partner || currentUser?.role_name === 'Channel Partner';
-
-  let visibleCards = allCards.filter((card) => {
-    if (isPartner) {
-      return ['orders', 'inventory', 'shipments'].includes(card.id);
-    }
-    if (card.id === 'inventory') return hasPermission(currentUser, 'inventory:read');
-    if (card.id === 'orders') return hasPermission(currentUser, 'orders:read');
-    if (card.id === 'purchases') return hasPermission(currentUser, 'purchases:read');
-    if (card.id === 'shipments') return hasPermission(currentUser, 'shipments:read');
-    return false;
+  // === Per-Company Cost Breakdown (Using dynamic companyOptions) ===
+  const companyStats = companyOptions.map(comp => {
+    const compOrders = dateFilteredOrders.filter((o: any) => (o.company || '').toLowerCase() === comp.toLowerCase());
+    const compPurchases = dateFilteredPurchases.filter((p: any) => (p.company || '').toLowerCase() === comp.toLowerCase());
+    const compRevenue = compOrders.reduce((s: number, o: any) => s + (parseFloat(o.price_usd || 0) * (o.qty || 1)), 0);
+    const compPurchaseCost = compPurchases.reduce((s: number, p: any) => s + (parseFloat(p.purchase_value || 0) + parseFloat(p.other_cost || 0) + parseFloat(p.extra_cost || 0)), 0);
+    const compProfit = compRevenue - compPurchaseCost;
+    return { name: comp, orders: compOrders.length, revenue: compRevenue, cost: compPurchaseCost, profit: compProfit };
   });
 
-  if (visibleCards.length === 0 && currentUser && !isPartner) {
-    visibleCards = [
-      {
-        id: 'assigned_partners',
-        title: 'Assigned Onboarding Partners',
-        value: assignedPartnersCount,
-        subtitle: 'View Partners',
-        icon: Store,
-        color: 'from-blue-600 to-indigo-600',
-      },
-      {
-        id: 'active_tasks',
-        title: 'Active Tasks',
-        value: tasksList.filter((t: any) => t.status !== 'Completed').length,
-        subtitle: 'View Active Tasks',
-        icon: CheckSquare,
-        color: 'from-indigo-600 to-purple-600',
-      },
-      {
-        id: 'completed_tasks',
-        title: 'Completed Tasks',
-        value: tasksList.filter((t: any) => t.status === 'Completed').length,
-        subtitle: 'View History',
-        icon: ShieldCheck,
-        color: 'from-emerald-600 to-teal-600',
-      },
-    ];
-  }
+  // Helper: find purchase cost for an order
+  const getOrderPurchaseCost = (orderId: number) => {
+    const pur = dateFilteredPurchases.find((p: any) => p.order_id === orderId);
+    if (!pur) return 0;
+    return (parseFloat(pur.purchase_value || 0) + parseFloat(pur.other_cost || 0) + parseFloat(pur.extra_cost || 0));
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 font-sans text-[#2c3338]">
 
-      {/* Low Stock Warning Banner - Shown to Admin and Inventory Manager (Not Partners) */}
-      {!isPartner && lowStockCount > 0 && hasPermission(currentUser, 'inventory:read') && (
-        <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200/60 flex items-center justify-between animate-fade-in">
-          <div className="flex items-center gap-3 text-amber-800 text-sm font-medium">
-            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
-              <AlertTriangle className="w-4 h-4 text-amber-600" />
-            </div>
-            <span>Notice: <strong className="text-amber-900">{lowStockCount}</strong> product(s) in inventory are low or out of stock.</span>
-          </div>
-          <a
-            href="/dashboard/inventory"
-            className="text-xs font-semibold px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-all"
-          >
-            View Details →
-          </a>
+      {/* Date Range Filter Controls */}
+      <div className="bg-white border border-[#c3c4c7] p-3 shadow-xs rounded-sm flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs font-bold text-[#1d2327]">
+          <Calendar className="w-4 h-4 text-[#2271b1]" />
+          <span className="uppercase tracking-wider">Date Range Filter:</span>
         </div>
-      )}
-
-      {/* Grid Metrics Cards - 4-Column B2B Layout */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {visibleCards.map((card, index) => {
-          const Icon = card.icon;
-
-          const handleCardClick = () => {
-            const routeMap: { [key: string]: string } = {
-              orders: '/dashboard/orders',
-              purchases: '/dashboard/purchases',
-              inventory: '/dashboard/inventory',
-              shipments: '/dashboard/shipments',
-              employees: '/dashboard/employees',
-              accounts: '/dashboard/accounts',
-              assigned_partners: '/dashboard/partners',
-              active_tasks: '/dashboard/tasks',
-              completed_tasks: '/dashboard/tasks',
-            };
-            const target = routeMap[card.id];
-            if (target) {
-              router.push(target);
-            }
-          };
-
-          return (
-            <div
-              key={card.id}
-              onClick={handleCardClick}
-              className="group text-left relative bg-white border border-slate-200/90 rounded-xl p-4.5 flex flex-col justify-between cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-blue-300 select-none"
-              style={{ animationDelay: `${index * 60}ms` }}
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="font-semibold text-[#50575e]">Start Date:</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-semibold text-[#50575e]">End Date:</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+            />
+          </div>
+          {(startDate || endDate) && (
+            <button
+              onClick={() => { setStartDate(''); setEndDate(''); }}
+              className="flex items-center gap-1 px-2.5 py-1 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#d63638] font-bold border border-[#c3c4c7] rounded-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center text-white shadow-xs`}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <p className="text-[11px] font-bold uppercase text-slate-500 tracking-wider">{card.title}</p>
-                </div>
-
-                {/* Per-Card Time Filter Selector */}
-                {card.setTimeRange && (
-                  <select
-                    value={card.timeRange}
-                    onChange={(e: any) => card.setTimeRange(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-[11px] font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-md px-2 py-0.5 outline-none cursor-pointer transition-colors"
-                  >
-                    <option value="today">Today</option>
-                    <option value="week">Week</option>
-                    <option value="month">Month</option>
-                    <option value="year">Year</option>
-                    <option value="all">All</option>
-                  </select>
-                )}
-              </div>
-
-              <div className="my-0.5">
-                <h3 className="text-[28px] font-bold text-slate-900 tracking-tight leading-none">{loading ? '...' : card.value}</h3>
-              </div>
-
-              <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[12px] text-blue-600 font-semibold group-hover:text-blue-700 transition-colors">
-                <span>{card.subtitle}</span>
-                <ArrowUpRight className="w-3.5 h-3.5 text-blue-600 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </div>
-            </div>
-          );
-        })}
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Date</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Assigned Partner Onboarding Tasks Widget (Only visible if assigned partners exist) */}
-      {(() => {
-        if (currentUser?.is_partner) return null;
-
-        const assignedPartners = usersList.filter((u: any) => {
-          if (!u.is_partner) return false;
-          return u.assigned_employee_id === currentUser?.id;
-        });
-
-        if (assignedPartners.length === 0) return null;
-
-        return (
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                  <Store className="w-4 h-4 text-blue-600" />
-                  Assigned Channel Partner Onboarding Workflows ({assignedPartners.length})
-                </h3>
-                <p className="text-[12px] text-slate-500 font-medium mt-0.5">
-                  High Priority onboarding tasks assigned to you. Click to upload documents and complete onboarding.
-                </p>
-              </div>
-
-              <Link
-                href="/dashboard/partners"
-                className="text-[12px] font-bold text-blue-600 hover:underline flex items-center gap-1"
-              >
-                <span>View All Partners</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
+      {/* Row 1: Main Metric Widgets */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${currentUser?.is_admin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4`}>
+        <Link href="/dashboard/orders" className="group bg-white border border-[#c3c4c7] p-4 shadow-xs rounded-sm hover:border-[#2271b1] transition-all cursor-pointer">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold uppercase text-[#50575e] tracking-wider">Total Sales Orders</span>
+            <div className="w-7 h-7 rounded bg-[#2271b1] text-white flex items-center justify-center"><ShoppingCart className="w-4 h-4" /></div>
+          </div>
+          <div className="text-2xl font-bold text-[#1d2327]">{loading ? '...' : dateFilteredOrders.length}</div>
+          <div className="mt-2 pt-2 border-t border-[#f0f0f1] flex items-center justify-between text-[11px] text-[#2271b1] font-semibold">
+            <span>View Orders</span><ArrowUpRight className="w-3.5 h-3.5" />
+          </div>
+        </Link>
+        <Link href="/dashboard/purchases" className="group bg-white border border-[#c3c4c7] p-4 shadow-xs rounded-sm hover:border-[#2271b1] transition-all cursor-pointer">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold uppercase text-[#50575e] tracking-wider">Purchases Queue</span>
+            <div className="w-7 h-7 rounded bg-[#135e96] text-white flex items-center justify-center"><ShoppingBag className="w-4 h-4" /></div>
+          </div>
+          <div className="text-2xl font-bold text-[#1d2327]">{loading ? '...' : dateFilteredPurchases.length}</div>
+          <div className="mt-2 pt-2 border-t border-[#f0f0f1] flex items-center justify-between text-[11px] text-[#2271b1] font-semibold">
+            <span>Review Purchases</span><ArrowUpRight className="w-3.5 h-3.5" />
+          </div>
+        </Link>
+        <Link href="/dashboard/shipments" className="group bg-white border border-[#c3c4c7] p-4 shadow-xs rounded-sm hover:border-[#2271b1] transition-all cursor-pointer">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold uppercase text-[#50575e] tracking-wider">Dispatched Shipments</span>
+            <div className="w-7 h-7 rounded bg-[#2c3338] text-white flex items-center justify-center"><Truck className="w-4 h-4" /></div>
+          </div>
+          <div className="text-2xl font-bold text-[#1d2327]">{loading ? '...' : dateFilteredShipments.length}</div>
+          <div className="mt-2 pt-2 border-t border-[#f0f0f1] flex items-center justify-between text-[11px] text-[#2271b1] font-semibold">
+            <span>Track Dispatches</span><ArrowUpRight className="w-3.5 h-3.5" />
+          </div>
+        </Link>
+        {currentUser?.is_admin && (
+          <Link href="/dashboard/roles" className="group bg-white border border-[#c3c4c7] p-4 shadow-xs rounded-sm hover:border-[#2271b1] transition-all cursor-pointer">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold uppercase text-[#50575e] tracking-wider">Registered Accounts</span>
+              <div className="w-7 h-7 rounded bg-[#72aee6] text-[#1d2327] flex items-center justify-center"><Building2 className="w-4 h-4" /></div>
             </div>
+            <div className="text-2xl font-bold text-[#1d2327]">{loading ? '...' : accountsList.length || 4}</div>
+            <div className="mt-2 pt-2 border-t border-[#f0f0f1] flex items-center justify-between text-[11px] text-[#2271b1] font-semibold">
+              <span>Manage Roles</span><ArrowUpRight className="w-3.5 h-3.5" />
+            </div>
+          </Link>
+        )}
+      </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {assignedPartners.map((partner: any) => (
-                <div key={partner.id} className="p-3.5 rounded-lg bg-blue-50/40 border border-blue-200/60 flex flex-col justify-between gap-3 hover:border-blue-400 transition-all">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-[13px] font-bold text-slate-900">{partner.full_name}</div>
-                      <div className="text-[11px] text-slate-500 font-mono">{partner.email}</div>
-                    </div>
+      {/* Admin Only: Row 2 (Financial Cost Summary) & Row 3 (Per-Company Cost Breakdown) */}
+      {currentUser?.is_admin && (
+        <>
+          {/* Row 2: Financial Cost Summary (All INR ₹) */}
+          <div className="bg-white border border-[#c3c4c7] shadow-xs rounded-sm overflow-hidden">
+            <div className="p-3 bg-[#f0f0f1] border-b border-[#c3c4c7] flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[#2271b1]" />
+              <h2 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider">Financial Summary (All in ₹ INR)</h2>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-0 divide-x divide-[#e0e0e0]">
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Total Revenue</div>
+                <div className="text-lg font-bold text-emerald-700">{loading ? '...' : `₹${totalSalesRevenue.toFixed(2)}`}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">{totalOrderQty} items</div>
+              </div>
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Purchase Cost</div>
+                <div className="text-lg font-bold text-[#d63638]">{loading ? '...' : `₹${totalPurchaseCost.toFixed(2)}`}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">{dateFilteredPurchases.length} purchases</div>
+              </div>
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Shipment Cost</div>
+                <div className="text-lg font-bold text-[#2271b1]">{loading ? '...' : `₹${totalShipmentCost.toFixed(2)}`}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">{dateFilteredShipments.length} dispatches</div>
+              </div>
+              <div className="p-4 text-center border-l-2 border-[#c3c4c7]">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Net Profit / Loss</div>
+                <div className={`text-lg font-bold ${totalProfitLoss >= 0 ? 'text-emerald-700' : 'text-[#d63638]'}`}>
+                  {loading ? '...' : `${totalProfitLoss >= 0 ? '+' : ''}₹${totalProfitLoss.toFixed(2)}`}
+                </div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">{totalProfitLoss >= 0 ? 'profit' : 'loss'}</div>
+              </div>
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Pending</div>
+                <div className="text-lg font-bold text-amber-600">{loading ? '...' : pendingOrders}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">awaiting</div>
+              </div>
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Shipped</div>
+                <div className="text-lg font-bold text-blue-700">{loading ? '...' : shippedOrders}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">in transit</div>
+              </div>
+              <div className="p-4 text-center">
+                <div className="text-[10px] font-bold uppercase text-[#50575e] tracking-wider mb-1">Delivered</div>
+                <div className="text-lg font-bold text-purple-700">{loading ? '...' : deliveredOrders}</div>
+                <div className="text-[10px] text-[#787c82] mt-0.5">completed</div>
+              </div>
+            </div>
+          </div>
 
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                      {partner.account_name || 'Marketplace'}
-                    </span>
+          {/* Row 3: Per-Company Cost Breakdown with Profit/Loss */}
+          <div className="bg-white border border-[#c3c4c7] shadow-xs rounded-sm overflow-hidden">
+            <div className="p-3 bg-[#f0f0f1] border-b border-[#c3c4c7] flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-[#2271b1]" />
+              <h2 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider">Company-wise Cost & Profit / Loss (₹ INR)</h2>
+            </div>
+            <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-${Math.min(companyStats.length, 4)} gap-0`}>
+              {companyStats.map((cs) => (
+                <div key={cs.name} className="p-4 border-b border-r border-[#e0e0e0]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-[#1d2327] uppercase">{cs.name}</span>
+                    <span className="text-[10px] font-semibold text-[#787c82]">{cs.orders} orders</span>
                   </div>
-
-                  <div className="flex items-center justify-between pt-2 border-t border-blue-200/40">
-                    <div className="flex items-center gap-1.5 text-[11px] text-slate-600 font-semibold">
-                      <Clock className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Stage: <strong className="text-blue-900">{partner.onboarding_status || 'Draft'}</strong></span>
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-[#50575e]">Revenue:</span>
+                      <span className="font-bold text-emerald-700">₹{cs.revenue.toFixed(2)}</span>
                     </div>
-
-                    <Link
-                      href={`/dashboard/partners/${partner.id}`}
-                      className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-semibold transition-all flex items-center gap-1"
-                    >
-                      <span>Complete Onboarding</span>
-                      <ArrowUpRight className="w-3 h-3" />
-                    </Link>
+                    <div className="flex justify-between">
+                      <span className="text-[#50575e]">Purchase Cost:</span>
+                      <span className="font-bold text-[#d63638]">₹{cs.cost.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between pt-1.5 border-t border-[#e0e0e0]">
+                      <span className="font-bold text-[#1d2327]">Profit / Loss:</span>
+                      <span className={`font-bold ${cs.profit >= 0 ? 'text-emerald-700' : 'text-[#d63638]'}`}>
+                        {cs.profit >= 0 ? '+' : ''}₹{cs.profit.toFixed(2)}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-        );
-      })()}
+        </>
+      )}
 
-      {/* MY ASSIGNED TASK TICKETS LIST (Only if tasks exist) */}
-      {!isPartner && tasksList.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div>
-              <h3 className="text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                <CheckSquare className="w-4 h-4 text-blue-600" />
-                My Assigned Task Tickets ({tasksList.length})
-              </h3>
-              <p className="text-[12px] text-slate-500 font-medium mt-0.5">
-                Live tasks and onboarding tickets assigned to you by administrators.
-              </p>
-            </div>
-
-            <Link
-              href="/dashboard/tasks"
-              className="text-[12px] font-semibold text-blue-600 hover:underline flex items-center gap-1"
+      {/* Company Quick Filter */}
+      <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-3 shadow-xs rounded-sm">
+        <div className="text-xs font-bold text-[#1d2327] uppercase tracking-wider mb-2.5 flex items-center gap-2">
+          <Filter className="w-4 h-4 text-[#2271b1]" />
+          Company Orders Quick Filter:
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs font-bold">
+          <button
+            onClick={() => setSelectedCompanyFilter('All')}
+            className={`p-2.5 rounded-xs border text-left transition-all ${selectedCompanyFilter === 'All'
+              ? 'bg-[#2271b1] text-white border-[#2271b1] shadow-xs'
+              : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+              }`}
+          >
+            <div>All Companies</div>
+            <div className="text-sm">{dateFilteredOrders.length} orders</div>
+          </button>
+          {companyOptions.map(c => (
+            <button
+              key={c}
+              onClick={() => setSelectedCompanyFilter(c)}
+              className={`p-2.5 rounded-xs border text-left transition-all ${selectedCompanyFilter === c
+                ? 'bg-[#2271b1] text-white border-[#2271b1] shadow-xs'
+                : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                }`}
             >
-              <span>Open Tasks Portal</span>
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </Link>
-          </div>
-
-          <div className="overflow-x-auto border border-slate-200 rounded-lg">
-            <table className="w-full text-left text-[12px]">
-              <thead>
-                <tr className="bg-slate-50/80 text-slate-600 font-bold uppercase border-b border-slate-200 text-[11px]">
-                  <th className="py-2.5 px-3">Ticket ID</th>
-                  <th className="py-2.5 px-3">Task Title</th>
-                  <th className="py-2.5 px-3">Priority</th>
-                  <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-800">
-                {tasksList.map((task: any) => (
-                  <tr key={task.id} className="hover:bg-slate-50/80">
-                    <td className="py-2.5 px-3 font-mono font-bold text-blue-600">{task.ticket_code}</td>
-                    <td className="py-2.5 px-3 font-semibold text-slate-900">{task.title}</td>
-                    <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${task.priority === 'High' || task.priority === 'Urgent'
-                        ? 'bg-red-50 text-red-700 border border-red-200'
-                        : 'bg-blue-50 text-blue-700 border border-blue-200'
-                        }`}>
-                        {task.priority}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3">
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-[11px]">
-                        {task.status}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      <Link
-                        href="/dashboard/tasks"
-                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md text-[11px] inline-flex items-center gap-1"
-                      >
-                        <span>View Ticket</span>
-                        <ArrowUpRight className="w-3 h-3" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              <div>{c}</div>
+              <div className="text-sm">{getCompanyCount(c)} orders</div>
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* ========================================================================= */}
-      {/* 1. SUPERADMIN DASHBOARD ALL-IN-ONE PANELS */}
-      {/* ========================================================================= */}
-      {(currentUser?.is_admin || roleName === 'Super Admin') && (
-        <div className="space-y-8">
-          {/* SECTION A: ORDERS OVERVIEW TABLE */}
-          <div className="card-premium p-6 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <ShoppingCart className="w-5 h-5 text-blue-600" />
-                  Sales Orders & Account Activity ({displayOrders.length})
-                </h2>
-                <p className="text-sm text-slate-600 font-medium">Live customer order list</p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                {/* Orders Time Range Selector */}
-                <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                  <Filter className="w-4 h-4 text-slate-600 ml-1.5" />
-                  <select
-                    value={ordersTimeRange}
-                    onChange={(e: any) => setOrdersTimeRange(e.target.value)}
-                    className="text-xs font-bold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
-                  >
-                    <option value="today">Today</option>
-                    <option value="week">Last Week</option>
-                    <option value="month">Last Month</option>
-                    <option value="year">This Year</option>
-                    <option value="all">All Time</option>
-                  </select>
-                </div>
-
-                <a
-                  href="/dashboard/orders"
-                  className="btn-primary"
-                >
-                  Manage Orders
-                </a>
-              </div>
-            </div>
-
-            {displayOrders.length === 0 ? (
-              <div className="py-8 text-center text-slate-400 text-sm italic">
-                No orders found for <strong className="uppercase">{ordersTimeRange}</strong>. Change filter above.
-              </div>
-            ) : (
-              <div className="table-container border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 text-xs font-semibold uppercase tracking-wider">
-                      <th className="py-3 px-4">Order #</th>
-                      <th className="py-3 px-4">Buyer Name</th>
-                      <th className="py-3 px-4">Product</th>
-                      <th className="py-3 px-4">Qty</th>
-                      <th className="py-3 px-4">Total Amount</th>
-                      <th className="py-3 px-4">Account Source</th>
-                      <th className="py-3 px-4">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-800">
-                    {displayOrders.map((ord) => (
-                      <tr key={ord.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3.5 px-4 font-mono font-medium text-blue-600">{ord.order_number}</td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-900">{ord.buyer_name}</td>
-                        <td className="py-3.5 px-4 text-slate-700">{ord.product_name}</td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-900">{ord.qty}</td>
-                        <td className="py-3.5 px-4 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
-                        <td className="py-3.5 px-4 text-xs font-semibold text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${ord.status === 'Ready for Shipment'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : ord.status === 'Pending Review' || ord.status === 'Pending Procurement'
-                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                              : 'bg-blue-50 text-blue-700 border border-blue-200'
-                            }`}>
-                            {ord.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+      {/* Orders Table with Cost Columns & Pagination */}
+      <div className="bg-white border border-[#c3c4c7] shadow-xs rounded-sm overflow-hidden">
+        <div className="p-3.5 bg-[#f0f0f1] border-b border-[#c3c4c7] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="w-4 h-4 text-[#2271b1]" />
+            <h2 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider">
+              Recent Sales Orders Dataset ({displayOrders.length})
+            </h2>
           </div>
-
-          {/* SECTION B: PENDING PURCHASES & PRODUCT REQUIREMENTS */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <ShoppingBag className="w-5 h-5 text-amber-600" />
-                  Pending Purchases & Product Procurement ({pendingReviewOrdersList.length})
-                </h2>
-                <p className="text-sm text-slate-600 font-medium">Orders requiring supplier purchase, quantities, and costs</p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                {/* Purchases Time Range Selector */}
-                <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                  <Filter className="w-4 h-4 text-slate-600 ml-1.5" />
-                  <select
-                    value={purchasesTimeRange}
-                    onChange={(e: any) => setPurchasesTimeRange(e.target.value)}
-                    className="text-xs font-bold bg-transparent text-slate-800 outline-none pr-2 cursor-pointer"
-                  >
-                    <option value="today">Today</option>
-                    <option value="week">Last Week</option>
-                    <option value="month">Last Month</option>
-                    <option value="year">This Year</option>
-                    <option value="all">All Time</option>
-                  </select>
-                </div>
-
-                <a
-                  href="/dashboard/purchases"
-                  className="btn-primary"
-                >
-                  Manage Purchases
-                </a>
-              </div>
-            </div>
-
-            {pendingReviewOrdersList.length === 0 ? (
-              <div className="py-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border border-slate-200">
-                No orders waiting for purchase for <strong className="uppercase">{purchasesTimeRange}</strong>
-              </div>
-            ) : (
-              <div className="table-container border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-semibold uppercase tracking-wider">
-                      <th className="py-3 px-3">Order #</th>
-                      <th className="py-3 px-3">Product Required</th>
-                      <th className="py-3 px-3">Required Qty</th>
-                      <th className="py-3 px-3">Unit Price (₹)</th>
-                      <th className="py-3 px-3">Total Purchase Cost</th>
-                      <th className="py-3 px-3">Source Account</th>
-                      <th className="py-3 px-3">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-800">
-                    {pendingReviewOrdersList.map((ord: any) => (
-                      <tr key={ord.id} className="hover:bg-amber-50/30">
-                        <td className="py-2.5 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
-                        <td className="py-2.5 px-3 font-bold text-slate-900">{ord.product_name}</td>
-                        <td className="py-2.5 px-3 font-bold text-amber-700">{ord.qty} units</td>
-                        <td className="py-2.5 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
-                        <td className="py-2.5 px-3 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                        <td className="py-2.5 px-3 font-semibold text-amber-700">{ord.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* SECTION C: INVENTORY PRODUCTS & SHIPMENTS (2-COLUMN GRID) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Inventory Stock Panel */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Package className="w-5 h-5 text-emerald-600" />
-                  Inventory Product Stock List
-                </h2>
-                <a href="/dashboard/inventory" className="text-xs font-semibold text-emerald-600 hover:underline">
-                  Manage Stock &rarr;
-                </a>
-              </div>
-
-              <div className="table-container border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                      <th className="py-2.5 px-3">Product Name</th>
-                      <th className="py-2.5 px-3">Stock Qty</th>
-                      <th className="py-2.5 px-3">Price</th>
-                      <th className="py-2.5 px-3">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-800">
-                    {inventoryList.map((item: any) => {
-                      const isLow = item.stock_quantity <= 2;
-                      return (
-                        <tr key={item.id} className="hover:bg-slate-50">
-                          <td className="py-2 px-3 font-semibold text-slate-900">{item.product_name}</td>
-                          <td className="py-2 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
-                          <td className="py-2 px-3 font-semibold text-emerald-700">₹{item.price.toFixed(2)}</td>
-                          <td className="py-2 px-3 whitespace-nowrap">
-                            <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap shrink-0 ${isLow ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              }`}>
-                              {isLow ? 'Low Stock' : 'Stock OK'}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Shipments Logistics Panel */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Truck className="w-5 h-5 text-purple-600" />
-                  Shipment Dispatches ({displayShipments.length})
-                </h2>
-
-                <div className="flex items-center gap-2">
-                  <select
-                    value={shipmentsTimeRange}
-                    onChange={(e: any) => setShipmentsTimeRange(e.target.value)}
-                    className="text-xs font-semibold bg-slate-100 text-slate-800 rounded px-2 py-1 outline-none border border-slate-200 cursor-pointer"
-                  >
-                    <option value="today">Today</option>
-                    <option value="week">Last Week</option>
-                    <option value="month">Last Month</option>
-                    <option value="year">This Year</option>
-                    <option value="all">All Time</option>
-                  </select>
-
-                  <a href="/dashboard/shipments" className="text-xs font-semibold text-purple-600 hover:underline">
-                    Manage &rarr;
-                  </a>
-                </div>
-              </div>
-
-              {displayShipments.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border border-slate-200">
-                  No shipment dispatches created for <strong className="uppercase">{shipmentsTimeRange}</strong>
-                </div>
-              ) : (
-                <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                        <th className="py-2.5 px-3">Carrier Partner</th>
-                        <th className="py-2.5 px-3">Tracking ID</th>
-                        <th className="py-2.5 px-3">Product Name</th>
-                        <th className="py-2.5 px-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {displayShipments.map((ship: any) => (
-                        <tr key={ship.id} className="hover:bg-slate-50">
-                          <td className="py-2 px-3 font-semibold text-slate-900">{ship.shipment_partner}</td>
-                          <td className="py-2 px-3 font-mono text-purple-700 font-semibold">{ship.tracking_id}</td>
-                          <td className="py-2 px-3 text-slate-700">{ship.product_name}</td>
-                          <td className="py-2 px-3 font-bold text-purple-700">{ship.status}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
+          <Link href="/dashboard/orders" className="text-xs font-bold text-[#2271b1] hover:underline flex items-center gap-1">
+            <span>View Full Dataset</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </Link>
         </div>
-      )}
 
-      {/* ========================================================================= */}
-      {/* 2. PURCHASE DEPARTMENT DASHBOARD VIEW */}
-      {/* ========================================================================= */}
-      {(currentUser?.is_admin || roleName === 'Purchase Manager' || currentDashboard === 'purchase') && !['Inventory Manager', 'Shipment Manager'].includes(roleName) && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Orders Needing Purchase ({purchasesTimeRange.toUpperCase()})</div>
-              <div className="text-4xl font-extrabold text-amber-600 mt-2">{pendingReviewOrdersList.length}</div>
-            </div>
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Supplier Purchases ({purchasesTimeRange.toUpperCase()})</div>
-              <div className="text-4xl font-extrabold text-slate-900 mt-2">{displayPurchases.length}</div>
-            </div>
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Low Stock Products</div>
-              <div className="text-4xl font-extrabold text-red-600 mt-2">{lowStockCount}</div>
-            </div>
+        {loading ? (
+          <div className="py-12 text-center">
+            <div className="w-6 h-6 border-2 border-[#2271b1] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+            <span className="text-xs text-[#50575e]">Loading dataset...</span>
           </div>
-
-          {/* Pending Purchases Detail Table */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <ShoppingBag className="w-5 h-5 text-amber-600" />
-                  Product Quantity & Purchase Cost Requirements
-                </h2>
-                <p className="text-sm text-slate-500 font-medium">Products, quantities, unit prices, and supplier cost</p>
-              </div>
-              <a
-                href="/dashboard/purchases"
-                className="btn-primary"
-              >
-                Go to Purchases Dept
-              </a>
-            </div>
-
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-sm">
+        ) : displayOrders.length === 0 ? (
+          <div className="py-12 text-center">
+            <ShoppingCart className="w-8 h-8 text-[#a7aaad] mx-auto mb-2" />
+            <p className="text-xs text-[#50575e]">No orders found for selected date & company filters.</p>
+          </div>
+        ) : (
+          <>
+            <div className="table-container overflow-x-auto">
+              <ResizableTable className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-bold uppercase tracking-wider">
-                    <th className="py-3 px-3">Order #</th>
-                    <th className="py-3 px-3">Product Name</th>
-                    <th className="py-3 px-3">Qty Required</th>
-                    <th className="py-3 px-3">Unit Price (₹)</th>
-                    <th className="py-3 px-3">Total Purchase Cost</th>
-                    <th className="py-3 px-3">Account Source</th>
-                    <th className="py-3 px-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {pendingReviewOrdersList.map((ord: any) => (
-                    <tr key={ord.id} className="hover:bg-amber-50/30">
-                      <td className="py-3 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
-                      <td className="py-3 px-3 font-semibold text-slate-900">{ord.product_name}</td>
-                      <td className="py-3 px-3 font-bold text-amber-700">{ord.qty} units</td>
-                      <td className="py-3 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
-                      <td className="py-3 px-3 font-bold text-emerald-700">₹{((ord.product_price || 0) * (ord.qty || 1)).toFixed(2)}</td>
-                      <td className="py-3 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                      <td className="py-3 px-3 font-semibold text-amber-700">{ord.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 3. SHIPMENT DEPARTMENT DASHBOARD VIEW */}
-      {/* ========================================================================= */}
-      {(currentUser?.is_admin || roleName === 'Shipment Manager' || currentDashboard === 'shipment') && !['Inventory Manager', 'Purchase Manager'].includes(roleName) && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Orders Ready for Dispatch ({ordersTimeRange.toUpperCase()})</div>
-              <div className="text-4xl font-extrabold text-purple-600 mt-2">{readyForShipmentOrdersList.length}</div>
-            </div>
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">In-Transit Dispatches ({shipmentsTimeRange.toUpperCase()})</div>
-              <div className="text-4xl font-extrabold text-blue-600 mt-2">{displayShipments.filter((s: any) => s.status !== 'Delivered').length}</div>
-            </div>
-            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-              <div className="text-sm font-bold uppercase text-slate-600 tracking-wider">Total Delivered Shipments</div>
-              <div className="text-4xl font-extrabold text-emerald-600 mt-2">{displayShipments.filter((s: any) => s.status === 'Delivered').length}</div>
-            </div>
-          </div>
-
-          {/* Orders Ready for Dispatch Table */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <Truck className="w-5 h-5 text-purple-600" />
-                  Orders Approved & Ready for Dispatch
-                </h2>
-                <p className="text-xs text-slate-500">Orders cleared by Purchase Department waiting for shipping carrier</p>
-              </div>
-              <a
-                href="/dashboard/shipments"
-                className="text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition-colors shadow-xs"
-              >
-                Go to Shipments Dept &rarr;
-              </a>
-            </div>
-
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-purple-50/70 text-purple-900 border-b border-purple-200 font-semibold uppercase tracking-wider">
-                    <th className="py-3 px-3">Order #</th>
-                    <th className="py-3 px-3">Buyer Name</th>
-                    <th className="py-3 px-3">Shipping Address</th>
-                    <th className="py-3 px-3">Product</th>
-                    <th className="py-3 px-3">Qty</th>
-                    <th className="py-3 px-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {readyForShipmentOrdersList.map((ord: any) => (
-                    <tr key={ord.id} className="hover:bg-purple-50/30">
-                      <td className="py-2.5 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
-                      <td className="py-2.5 px-3 font-bold text-slate-900">{ord.buyer_name}</td>
-                      <td className="py-2.5 px-3 text-slate-700">{ord.shipment_address_1}</td>
-                      <td className="py-2.5 px-3 font-medium text-slate-800">{ord.product_name}</td>
-                      <td className="py-2.5 px-3 font-bold text-slate-900">{ord.qty}</td>
-                      <td className="py-2.5 px-3 font-semibold text-emerald-700">{ord.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* ========================================================================= */}
-      {/* 4. INVENTORY MANAGER DASHBOARD VIEW */}
-      {/* ========================================================================= */}
-      {roleName === 'Inventory Manager' && (
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Package className="w-5 h-5 text-emerald-600" />
-                  Inventory Product Stock List ({inventoryList.length})
-                </h2>
-                <p className="text-xs text-slate-500">Live catalog, quantities, and stock alerts</p>
-              </div>
-              <a href="/dashboard/inventory" className="btn-primary">
-                Manage Inventory
-              </a>
-            </div>
-
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                    <th className="py-2.5 px-3">Product Name</th>
-                    <th className="py-2.5 px-3">SKU</th>
-                    <th className="py-2.5 px-3">Stock Qty</th>
-                    <th className="py-2.5 px-3">Price</th>
+                  <tr className="bg-[#f6f7f7] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Date</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Company</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[180px]">Product Name</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Sale Price (₹)</th>
+                    {currentUser?.is_admin && (
+                      <>
+                        <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Purchase Cost (₹)</th>
+                        <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Profit / Loss (₹)</th>
+                      </>
+                    )}
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Buyer</th>
                     <th className="py-2.5 px-3">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {inventoryList.map((item: any) => {
-                    const isLow = item.stock_quantity <= 5;
-                    const isOut = item.stock_quantity === 0;
+                <tbody className="divide-y divide-[#dcdcde]">
+                  {paginatedOrders.map((ord, idx) => {
+                    const saleInr = parseFloat(ord.price_usd || ord.product_price || 0) * (ord.qty || 1);
+                    const purCost = getOrderPurchaseCost(ord.id);
+                    const orderProfit = saleInr - purCost;
                     return (
-                      <tr key={item.id} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-3 font-semibold text-slate-900">{item.product_name}</td>
-                        <td className="py-2.5 px-3 font-mono text-blue-600">{item.sku || '—'}</td>
-                        <td className="py-2.5 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
-                        <td className="py-2.5 px-3 font-semibold text-emerald-700">${item.price.toFixed(2)}</td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap shrink-0 ${isOut ? 'bg-red-50 text-red-700 border border-red-200' : isLow ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}>
-                            {isOut ? 'Out of Stock' : isLow ? 'Low Stock' : 'Stock OK'}
-                          </span>
+                      <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.order_process_date || ord.order_date || '—'}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold max-w-[220px] truncate" title={ord.product_name}>
+                          <div className="flex items-center gap-2">
+                            {ord.product_image ? (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={getImageUrl(ord.product_image)}
+                                alt=""
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                                className="w-6 h-6 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                              />
+                            ) : (
+                              <div className="w-6 h-6 rounded-xs bg-[#f6f7f7] border border-[#c3c4c7] flex items-center justify-center text-[#50575e] font-bold text-[9px] shrink-0">
+                                📦
+                              </div>
+                            )}
+                            <span className="truncate">{ord.product_name}</span>
+                          </div>
                         </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 1. TOTAL ORDERS MODAL (WITH TIME FILTER & ACCOUNT BREAKDOWN) */}
-      {/* ========================================================================= */}
-      {activeModal === 'orders' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <ShoppingCart className="w-6 h-6 text-blue-600" />
-                  Orders Breakdown by Account ({ordersTimeRange.toUpperCase()})
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Order counts and sales values filtered for selected time period</p>
-              </div>
-
-              {/* Modal Time Filters */}
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                <button
-                  onClick={() => setOrdersTimeRange('today')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${ordersTimeRange === 'today' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                >
-                  Today
-                </button>
-                <button
-                  onClick={() => setOrdersTimeRange('week')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${ordersTimeRange === 'week' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                >
-                  Week
-                </button>
-                <button
-                  onClick={() => setOrdersTimeRange('month')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${ordersTimeRange === 'month' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                >
-                  Month
-                </button>
-                <button
-                  onClick={() => setOrdersTimeRange('year')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${ordersTimeRange === 'year' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                >
-                  Year
-                </button>
-                <button
-                  onClick={() => setOrdersTimeRange('all')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${ordersTimeRange === 'all' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setActiveModal(null)}
-                  className="p-1 rounded-lg hover:bg-slate-200 text-slate-500 ml-2"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Account Breakdown Summary Cards */}
-            <div className="space-y-4">
-              {Object.keys(getOrdersByAccount()).length === 0 ? (
-                <div className="py-8 text-center text-slate-400 text-xs italic">
-                  No orders found for <strong className="uppercase">{ordersTimeRange}</strong>.
-                </div>
-              ) : (
-                Object.entries(getOrdersByAccount()).map(([accName, data]) => (
-                  <div key={accName} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="w-4 h-4 text-blue-600" />
-                        <h3 className="font-bold text-slate-900 text-sm">{accName}</h3>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs font-semibold">
-                        <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-200">
-                          {data.count} Order(s)
-                        </span>
-                        <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200">
-                          ₹{data.totalRevenue.toFixed(2)} Total Value
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Orders Table for this Account */}
-                    <div className="overflow-x-auto bg-white rounded-lg border border-slate-200">
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-100/60 text-slate-600 border-b border-slate-200 font-semibold">
-                            <th className="py-2.5 px-3">Order #</th>
-                            <th className="py-2.5 px-3">Buyer Name</th>
-                            <th className="py-2.5 px-3">Product Name</th>
-                            <th className="py-2.5 px-3">Qty</th>
-                            <th className="py-2.5 px-3">Price</th>
-                            <th className="py-2.5 px-3">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-800">
-                          {data.orders.map((ord: any) => (
-                            <tr key={ord.id} className="hover:bg-slate-50">
-                              <td className="py-2 px-3 font-mono font-medium text-blue-600">{ord.order_number}</td>
-                              <td className="py-2 px-3 font-semibold text-slate-900">{ord.buyer_name}</td>
-                              <td className="py-2 px-3 text-slate-700">{ord.product_name}</td>
-                              <td className="py-2 px-3 font-bold">{ord.qty}</td>
-                              <td className="py-2 px-3 font-semibold text-emerald-700">₹{((ord.product_price || 0) * ord.qty).toFixed(2)}</td>
-                              <td className="py-2 px-3">
-                                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                                  {ord.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/orders"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Full Orders Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Breakdown
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 2. PENDING PURCHASES MODAL (WITH TIME FILTER & PRODUCT REQUIREMENT) */}
-      {/* ========================================================================= */}
-      {activeModal === 'purchases' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <ShoppingBag className="w-6 h-6 text-amber-600" />
-                  Pending Purchases & Required Product Quantities ({purchasesTimeRange.toUpperCase()})
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Which products need to be ordered, required quantities, and total purchase costs</p>
-              </div>
-
-              {/* Modal Time Filters */}
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                <button
-                  onClick={() => setPurchasesTimeRange('today')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${purchasesTimeRange === 'today' ? 'bg-amber-600 text-white' : 'text-slate-600'}`}
-                >
-                  Today
-                </button>
-                <button
-                  onClick={() => setPurchasesTimeRange('week')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${purchasesTimeRange === 'week' ? 'bg-amber-600 text-white' : 'text-slate-600'}`}
-                >
-                  Week
-                </button>
-                <button
-                  onClick={() => setPurchasesTimeRange('month')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${purchasesTimeRange === 'month' ? 'bg-amber-600 text-white' : 'text-slate-600'}`}
-                >
-                  Month
-                </button>
-                <button
-                  onClick={() => setPurchasesTimeRange('year')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${purchasesTimeRange === 'year' ? 'bg-amber-600 text-white' : 'text-slate-600'}`}
-                >
-                  Year
-                </button>
-                <button
-                  onClick={() => setPurchasesTimeRange('all')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${purchasesTimeRange === 'all' ? 'bg-amber-600 text-white' : 'text-slate-600'}`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setActiveModal(null)}
-                  className="p-1 rounded-lg hover:bg-slate-200 text-slate-500 ml-2"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Pending Orders Section */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
-                Products Needing Procurement / Purchase ({getPendingPurchasesBreakdown().pendingReviewOrders.length})
-              </h3>
-
-              {getPendingPurchasesBreakdown().pendingReviewOrders.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border border-slate-200">
-                  No orders currently waiting for purchase for <strong className="uppercase">{purchasesTimeRange}</strong>
-                </div>
-              ) : (
-                <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-amber-50/70 text-amber-900 border-b border-amber-200 font-semibold uppercase tracking-wider">
-                        <th className="py-3 px-3">Order #</th>
-                        <th className="py-3 px-3">Product Required</th>
-                        <th className="py-3 px-3">Required Qty</th>
-                        <th className="py-3 px-3">Unit Price (₹)</th>
-                        <th className="py-3 px-3">Total Purchase Cost</th>
-                        <th className="py-3 px-3">Source Account</th>
-                        <th className="py-3 px-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {getPendingPurchasesBreakdown().pendingReviewOrders.map((ord: any) => {
-                        const totalCost = (ord.product_price || 0) * (ord.qty || 1);
-                        return (
-                          <tr key={ord.id} className="hover:bg-amber-50/30 transition-colors">
-                            <td className="py-2.5 px-3 font-mono font-semibold text-blue-600">{ord.order_number}</td>
-                            <td className="py-2.5 px-3 font-bold text-slate-900">{ord.product_name}</td>
-                            <td className="py-2.5 px-3 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block my-1">
-                              {ord.qty} units
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">₹{saleInr.toFixed(2)}</td>
+                        {currentUser?.is_admin && (
+                          <>
+                            <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#d63638]">{purCost > 0 ? `₹${purCost.toFixed(2)}` : '—'}</td>
+                            <td className={`py-2 px-3 border-r border-[#e0e0e0] font-bold ${purCost > 0 ? (orderProfit >= 0 ? 'text-emerald-700' : 'text-[#d63638]') : 'text-[#787c82]'}`}>
+                              {purCost > 0 ? `${orderProfit >= 0 ? '+' : ''}₹${orderProfit.toFixed(2)}` : '—'}
                             </td>
-                            <td className="py-2.5 px-3 text-slate-700">₹{(ord.product_price || 0).toFixed(2)}</td>
-                            <td className="py-2.5 px-3 font-bold text-emerald-700">₹{totalCost.toFixed(2)}</td>
-                            <td className="py-2.5 px-3 text-slate-600">{ord.account_name || 'Direct Sales'}</td>
-                            <td className="py-2.5 px-3 font-semibold text-amber-700">{ord.status}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* Active Supplier Purchase Orders */}
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5 pt-2">
-                <PackageCheck className="w-4 h-4 text-emerald-600" />
-                Active Procurement Supplier Purchases ({displayPurchases.length})
-              </h3>
-
-              {displayPurchases.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border border-slate-200">
-                  No active supplier purchase orders recorded for <strong className="uppercase">{purchasesTimeRange}</strong>
-                </div>
-              ) : (
-                <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                        <th className="py-3 px-3">Order ID</th>
-                        <th className="py-3 px-3">Product Name</th>
-                        <th className="py-3 px-3">Qty</th>
-                        <th className="py-3 px-3">Purchase Value</th>
-                        <th className="py-3 px-3">Est. Delivery Date</th>
-                        <th className="py-3 px-3">Supplier Account</th>
-                        <th className="py-3 px-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {displayPurchases.map((pur: any) => (
-                        <tr key={pur.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-mono font-medium text-blue-600">#ORD-{pur.order_id}</td>
-                          <td className="py-2.5 px-3 font-semibold text-slate-900">{pur.product_name}</td>
-                          <td className="py-2.5 px-3 font-bold">{pur.qty}</td>
-                          <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{pur.purchase_value.toFixed(2)}</td>
-                          <td className="py-2.5 px-3 text-slate-600">{pur.estimated_shipment_date || 'TBD'}</td>
-                          <td className="py-2.5 px-3 text-slate-500">{pur.account_name || 'N/A'}</td>
-                          <td className="py-2.5 px-3 font-semibold text-emerald-700">{pur.status}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/purchases"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Full Purchases Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Modal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 3. INVENTORY STOCK MODAL */}
-      {/* ========================================================================= */}
-      {activeModal === 'inventory' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-3xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Package className="w-6 h-6 text-emerald-600" />
-                  Inventory Stock & Products Breakdown
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Showing all registered products and live stock quantities</p>
-              </div>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                    <th className="py-3 px-3">Product Name</th>
-                    <th className="py-3 px-3">Current Stock Qty</th>
-                    <th className="py-3 px-3">Unit Price (₹)</th>
-                    <th className="py-3 px-3">Stock Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {inventoryList.map((item: any) => {
-                    const isLow = item.stock_quantity <= 2;
-                    return (
-                      <tr key={item.id} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-3 font-semibold text-slate-900">{item.product_name}</td>
-                        <td className="py-2.5 px-3 font-bold text-slate-800">{item.stock_quantity} units</td>
-                        <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{item.price.toFixed(2)}</td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap shrink-0 ${isLow
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              }`}
-                          >
-                            {isLow ? 'Low Stock Warning' : 'Sufficient Stock'}
+                          </>
+                        )}
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold">{ord.buyer_name}</td>
+                        <td className="py-2 px-3">
+                          <span className={`px-2 py-0.5 font-bold text-[10px] uppercase rounded-xs border ${ord.status === 'Delivered' ? 'bg-purple-100 text-purple-900 border-purple-300'
+                            : ord.status === 'Shipped' ? 'bg-blue-100 text-blue-900 border-blue-300'
+                              : ord.status === 'Purchased' ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                : ord.status === 'Ready to Ship' || ord.status === 'Ready for Shipment' ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                  : 'bg-[#f0f0f1] text-[#1d2327] border-[#c3c4c7]'
+                            }`}>
+                            {ord.status || 'ADBH'}
                           </span>
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
-              </table>
+              </ResizableTable>
             </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/inventory"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Full Inventory Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Modal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 4. SHIPMENTS TRACKED MODAL (WITH TIME FILTER) */}
-      {/* ========================================================================= */}
-      {activeModal === 'shipments' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-4xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Truck className="w-6 h-6 text-purple-600" />
-                  Shipments Tracking Breakdown ({shipmentsTimeRange.toUpperCase()})
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Carrier partner status and tracking information</p>
+            {/* Pagination Controls Footer */}
+            <div className="p-3 bg-[#f6f7f7] border-t border-[#c3c4c7] flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-1.5 text-[#50575e]">
+                <span className="font-medium">Total:</span>
+                <span className="font-bold text-[#1d2327]">{displayOrders.length} entries</span>
               </div>
 
-              {/* Modal Time Filters */}
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                <button
-                  onClick={() => setShipmentsTimeRange('today')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${shipmentsTimeRange === 'today' ? 'bg-purple-600 text-white' : 'text-slate-600'}`}
-                >
-                  Today
-                </button>
-                <button
-                  onClick={() => setShipmentsTimeRange('week')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${shipmentsTimeRange === 'week' ? 'bg-purple-600 text-white' : 'text-slate-600'}`}
-                >
-                  Week
-                </button>
-                <button
-                  onClick={() => setShipmentsTimeRange('month')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${shipmentsTimeRange === 'month' ? 'bg-purple-600 text-white' : 'text-slate-600'}`}
-                >
-                  Month
-                </button>
-                <button
-                  onClick={() => setShipmentsTimeRange('year')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${shipmentsTimeRange === 'year' ? 'bg-purple-600 text-white' : 'text-slate-600'}`}
-                >
-                  Year
-                </button>
-                <button
-                  onClick={() => setShipmentsTimeRange('all')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold ${shipmentsTimeRange === 'all' ? 'bg-purple-600 text-white' : 'text-slate-600'}`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setActiveModal(null)}
-                  className="p-1 rounded-lg hover:bg-slate-200 text-slate-500 ml-2"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[#50575e]">Show:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="px-2 py-1 bg-white border border-[#c3c4c7] rounded-xs text-xs font-bold outline-none cursor-pointer"
+                  >
+                    <option value={10}>10 per page</option>
+                    <option value={25}>25 per page</option>
+                    <option value={50}>50 per page</option>
+                    <option value={100}>100 per page</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs font-bold text-[#2c3338] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#f0f0f1] transition-all flex items-center gap-1"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Prev</span>
+                  </button>
+
+                  <span className="px-2.5 py-1 font-bold text-[#1d2327]">
+                    Page {currentPage} of {totalPages}
+                  </span>
+
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    disabled={currentPage >= totalPages}
+                    className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs font-bold text-[#2c3338] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#f0f0f1] transition-all flex items-center gap-1"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                    <th className="py-3 px-3">Order ID</th>
-                    <th className="py-3 px-3">Carrier Partner</th>
-                    <th className="py-3 px-3">Tracking ID</th>
-                    <th className="py-3 px-3">Product Name</th>
-                    <th className="py-3 px-3">Weight</th>
-                    <th className="py-3 px-3">Cost</th>
-                    <th className="py-3 px-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {displayShipments.map((ship: any) => (
-                    <tr key={ship.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-3 font-mono font-medium text-blue-600">#ORD-{ship.order_id}</td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-900">{ship.shipment_partner}</td>
-                      <td className="py-2.5 px-3 font-mono font-semibold text-purple-700">{ship.tracking_id}</td>
-                      <td className="py-2.5 px-3 text-slate-700">{ship.product_name}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{ship.weight} kg</td>
-                      <td className="py-2.5 px-3 font-semibold text-emerald-700">₹{ship.shipment_cost.toFixed(2)}</td>
-                      <td className="py-2.5 px-3 font-bold text-purple-700">{ship.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/shipments"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Full Shipments Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Modal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 5. TEAM EMPLOYEES MODAL */}
-      {/* ========================================================================= */}
-      {activeModal === 'employees' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-2xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Users className="w-6 h-6 text-cyan-600" />
-                  Team Employees Breakdown
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Active team members and assigned roles</p>
-              </div>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                    <th className="py-3 px-3">Name</th>
-                    <th className="py-3 px-3">Email</th>
-                    <th className="py-3 px-3">Role</th>
-                    <th className="py-3 px-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {usersList.map((user: any) => (
-                    <tr key={user.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-3 font-semibold text-slate-900">{user.full_name}</td>
-                      <td className="py-2.5 px-3 font-mono text-slate-600">{user.email}</td>
-                      <td className="py-2.5 px-3 font-semibold text-indigo-700">
-                        {user.is_admin ? 'Super Admin' : user.role_name || (typeof user.role === 'object' ? user.role?.name : user.role) || 'Staff'}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          Active
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/employees"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Employees Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Modal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 6. REGISTERED ACCOUNTS MODAL */}
-      {/* ========================================================================= */}
-      {activeModal === 'accounts' && (
-        <div
-          onClick={() => setActiveModal(null)}
-          className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="modal-content bg-white border border-surface-200 w-full max-w-2xl rounded-2xl p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Building2 className="w-6 h-6 text-rose-600" />
-                  Registered Accounts & Marketplaces
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Channel partner accounts and store owners</p>
-              </div>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold uppercase">
-                    <th className="py-3 px-3">Account Name</th>
-                    <th className="py-3 px-3">Account Type</th>
-                    <th className="py-3 px-3">Owner / Contact</th>
-                    <th className="py-3 px-3">Commission Rate</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {accountsList.map((acc: any) => (
-                    <tr key={acc.id} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-3 font-semibold text-slate-900">{acc.account_name}</td>
-                      <td className="py-2.5 px-3 font-medium text-indigo-700">{acc.account_type}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{acc.owner_name}</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-700">{acc.commission_rate || 5}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <Link
-                href="/dashboard/accounts"
-                onClick={() => setActiveModal(null)}
-                className="btn-primary text-xs"
-              >
-                <span>View Accounts Page</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg shadow-xs"
-              >
-                Close Modal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
+
