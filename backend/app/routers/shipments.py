@@ -77,7 +77,7 @@ def create_shipment(
 
     allowed_comps = get_user_allowed_companies(current_user)
     if allowed_comps:
-        comp_val = (order.company or "ADBH").strip().lower()
+        comp_val = (order.company or "").strip().lower()
         if not any(c.lower() in comp_val for c in allowed_comps):
             raise HTTPException(
                 status_code=403,

@@ -198,7 +198,7 @@ def create_order(
 
     allowed_comps = get_user_allowed_companies(current_user)
     if allowed_comps:
-        comp_val = (order_in.company or "ADBH").strip().lower()
+        comp_val = (order_in.company or "").strip().lower()
         if not any(c.lower() in comp_val for c in allowed_comps):
             raise HTTPException(
                 status_code=403,
@@ -209,6 +209,12 @@ def create_order(
     if not current_user.is_admin and (is_partner_user or current_user.account_name or current_user.account_id):
         account_id = current_user.account_id
         account_name = current_user.account_name
+
+    if not account_id and order_in.seller_account:
+        acc = db.query(Account).filter(Account.account_name.ilike(order_in.seller_account.strip())).first()
+        if acc:
+            account_id = acc.id
+            account_name = acc.account_name
 
     if account_id and not account_name:
         acc = db.query(Account).filter(Account.id == account_id).first()
@@ -233,7 +239,7 @@ def create_order(
         order_process_date=order_in.order_process_date or date.today(),
         last_delivery_date=order_in.last_delivery_date,
         shipping_date=order_in.shipping_date,
-        company=order_in.company or "ADBH",
+        company=order_in.company,
         shipment_id=shipment_num,
         seller_account=order_in.seller_account,
         product_id=inventory_item.id if inventory_item else None,
@@ -242,7 +248,7 @@ def create_order(
         product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None) or (extract_product_info_from_url(order_in.product_url).get("image_url") if order_in.product_url else None),
         qty=order_in.qty,
         product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-        order_status=order_in.order_status or order_in.status or "ADBH",
+        order_status=order_in.order_status or order_in.status,
         purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
         arriving_date=order_in.arriving_date,
         consignee_name=order_in.consignee_name or "Consignee",
@@ -534,7 +540,7 @@ def create_bulk_orders(
             product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None),
             qty=order_in.qty or 1,
             product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-            order_status=order_in.order_status or order_in.status or "ADBH",
+            order_status=order_in.order_status or order_in.status,
             purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
             arriving_date=order_in.arriving_date,
             consignee_name=order_in.consignee_name or "Consignee",
@@ -628,6 +634,12 @@ def update_order(
             order.product_price = value
         elif hasattr(order, field):
             setattr(order, field, value)
+
+    if order_in.seller_account:
+        acc = db.query(Account).filter(Account.account_name.ilike(order_in.seller_account.strip())).first()
+        if acc:
+            order.account_id = acc.id
+            order.account_name = acc.account_name
 
     if order_in.status is not None and order_in.status == "Ready to Ship" and old_status != "Ready to Ship":
         inv = None

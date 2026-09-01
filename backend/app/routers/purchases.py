@@ -67,7 +67,7 @@ def create_purchase(
 
     allowed_comps = get_user_allowed_companies(current_user)
     if allowed_comps:
-        comp_val = (pur_in.company or order.company or "ADBH").strip().lower()
+        comp_val = (pur_in.company or order.company or "").strip().lower()
         if not any(c.lower() in comp_val for c in allowed_comps):
             raise HTTPException(
                 status_code=403,
@@ -91,7 +91,7 @@ def create_purchase(
         purchase_partner_name=pur_in.purchase_partner_name or pur_in.account_name,
         payment_status=pur_in.payment_status or "Paid",
         notes=pur_in.notes,
-        company=pur_in.company or order.company or "ADBH",
+        company=pur_in.company or order.company,
         qty=pur_in.qty or order.qty,
         status="Purchased"
     )

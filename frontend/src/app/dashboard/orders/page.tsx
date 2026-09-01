@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, getImageUrl } from '@/lib/api';
+import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
 import {
   ShoppingCart,
@@ -47,6 +47,8 @@ export default function OrdersPage() {
   const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [purchasesList, setPurchasesList] = useState<any[]>([]);
   const [dbAccounts, setDbAccounts] = useState<any[]>([]);
+  const [companiesList, setCompaniesList] = useState<any[]>([]);
+  const [partnersList, setPartnersList] = useState<any[]>([]);
   const [inventoryList, setInventoryList] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -251,10 +253,14 @@ export default function OrdersPage() {
       const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
       const meRes = await authApi.getMe().catch(() => ({ data: null }));
       const accRes = await accountsApi.list().catch(() => ({ data: [] }));
+      const compRes = await companiesApi.list().catch(() => ({ data: [] }));
+      const partRes = await partnersMgmtApi.list().catch(() => ({ data: [] }));
       const invRes = await inventoryApi.list().catch(() => ({ data: [] }));
       const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
       setOrders(ordRes.data || []);
       setDbAccounts(accRes.data || []);
+      setCompaniesList(compRes.data || []);
+      setPartnersList(partRes.data || []);
       setInventoryList(invRes.data || []);
       setPurchasesList(purRes.data || []);
       const user = meRes?.data || null;
@@ -313,11 +319,22 @@ export default function OrdersPage() {
     }
   };
 
-  // Allowed companies for current user
+  // Allowed companies and partners list
   const companyOptions = getAllowedCompanies(currentUser);
+  const companyItems = Array.from(new Set([
+    ...companiesList.map((c: any) => c.company_name).filter(Boolean),
+    ...companyOptions
+  ]));
+  const partnerItems = Array.from(new Set(
+    partnersList.map((p: any) => p.partner_name).filter(Boolean)
+  ));
+
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
-    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase());
+    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin') return true;
+    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase()) ||
+           companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
+           partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
   };
 
   // Filter logic
@@ -364,14 +381,80 @@ export default function OrdersPage() {
 
     setFilteredOrders(result);
     setCurrentPage(1);
-  }, [orders, selectedCompany, selectedStatus, searchQuery, startDate, endDate, currentUser]);
+  }, [orders, selectedCompany, selectedStatus, searchQuery, startDate, endDate, currentUser, companiesList, partnersList]);
 
-  // Unified Seller Account list
-  const availableSellerAccounts = Array.from(new Set(
-    dbAccounts.map((a: any) => a.account_name).filter(Boolean)
-  ));
+  // Helper to strictly get accounts connected to selected Company or Partner
+  const getAccountsForEntity = (selectedEntity: string): string[] => {
+    if (!selectedEntity || !selectedEntity.trim()) {
+      return [];
+    }
 
-  const filteredSellerAccounts = availableSellerAccounts.filter(acc =>
+    const clean = selectedEntity.trim().toLowerCase();
+
+    // Check matching company in companiesList
+    const matchedCompany = companiesList.find((c: any) =>
+      c.company_name?.toLowerCase() === clean ||
+      c.company_name?.toLowerCase().includes(clean) ||
+      clean.includes(c.company_name?.toLowerCase() || '')
+    );
+
+    // Check matching partner in partnersList
+    const matchedPartner = partnersList.find((p: any) =>
+      p.partner_name?.toLowerCase() === clean ||
+      p.partner_name?.toLowerCase().includes(clean) ||
+      clean.includes(p.partner_name?.toLowerCase() || '')
+    );
+
+    let matched: any[] = [];
+
+    if (matchedCompany) {
+      matched = dbAccounts.filter((acc: any) => {
+        // Direct foreign key match to this company
+        if (acc.company_id && acc.company_id === matchedCompany.id) return true;
+        // Strictly Company category matching this company's name
+        if (acc.category?.toLowerCase() === 'company') {
+          if (acc.company_id && acc.company_id !== matchedCompany.id) return false;
+          if (acc.partner_id) return false;
+          if (acc.purchase_company && (
+            acc.purchase_company.toLowerCase() === clean ||
+            acc.purchase_company.toLowerCase() === matchedCompany.company_name?.toLowerCase() ||
+            matchedCompany.company_name?.toLowerCase().includes(acc.purchase_company.toLowerCase()) ||
+            acc.purchase_company.toLowerCase().includes(matchedCompany.company_name?.toLowerCase())
+          )) return true;
+        }
+        return false;
+      });
+    } else if (matchedPartner) {
+      matched = dbAccounts.filter((acc: any) => {
+        // Direct foreign key match to this partner
+        if (acc.partner_id && acc.partner_id === matchedPartner.id) return true;
+        // Strictly Partner category matching this partner
+        if (acc.category?.toLowerCase() === 'partner') {
+          if (acc.partner_id && acc.partner_id !== matchedPartner.id) return false;
+          if (acc.company_id) return false;
+          if (acc.purchase_company && acc.purchase_company.toLowerCase() === clean) return true;
+          if (acc.account_name?.toLowerCase() === clean || clean.includes(acc.account_name?.toLowerCase())) return true;
+        }
+        return false;
+      });
+    } else {
+      // Fallback for custom company name without company_id (e.g. Globle, canton)
+      matched = dbAccounts.filter((acc: any) => {
+        if (!acc.company_id && !acc.partner_id) {
+          if (acc.purchase_company && acc.purchase_company.toLowerCase() === clean) return true;
+          if (acc.account_name && acc.account_name.toLowerCase() === clean) return true;
+        }
+        return false;
+      });
+    }
+
+    return Array.from(new Set(matched.map((a: any) => a.account_name).filter(Boolean)));
+  };
+
+  // Unified Seller Account list strictly filtered by selected Company / Partner
+  const availableSellerAccounts = getAccountsForEntity(orderForm.company);
+
+  const filteredSellerAccounts = availableSellerAccounts.filter((acc: string) =>
     acc.toLowerCase().includes((sellerSearch || orderForm.seller_account || '').toLowerCase())
   );
 
@@ -563,15 +646,18 @@ export default function OrdersPage() {
     if (urlFetchTimeoutRef.current) clearTimeout(urlFetchTimeoutRef.current);
     setFetchingUrlImage(false);
     setUrlFetchStatus(null);
+    const defaultCompany = companyItems[0] || (partnerItems[0] || 'ADBH');
+    const initialAccounts = getAccountsForEntity(defaultCompany);
+    const defaultSellerAccount = initialAccounts.length === 1 ? initialAccounts[0] : '';
     setOrderForm({
       order_process_date: new Date().toISOString().split('T')[0],
       shipping_date: '',
       last_delivery_date: '',
       arriving_date: '',
-      company: '',
+      company: defaultCompany,
       shipment_id: nextShipmentId,
       order_number: '',
-      seller_account: '',
+      seller_account: defaultSellerAccount,
       product_name: '',
       product_url: '',
       product_image: '',
@@ -588,7 +674,7 @@ export default function OrdersPage() {
       country: '',
       status: 'ADBH'
     });
-    setSellerSearch('');
+    setSellerSearch(defaultSellerAccount);
     setShowAddModal(true);
   };
 
@@ -906,11 +992,16 @@ export default function OrdersPage() {
                     const arriveDate = ord.arriving_date || matchingPur?.estimated_shipment_date || '—';
                     const companyColorMap: { [key: string]: string } = {
                       ADBH: 'bg-emerald-100 text-emerald-900 border-emerald-300',
+                      'ADBH-RBS': 'bg-emerald-100 text-emerald-900 border-emerald-300',
                       Vetai: 'bg-blue-100 text-blue-900 border-blue-300',
-                      Globle: 'bg-purple-100 text-purple-900 border-purple-300',
+                      Veta: 'bg-blue-100 text-blue-900 border-blue-300',
+                      Globle: 'bg-indigo-100 text-indigo-900 border-indigo-300',
                       canton: 'bg-amber-100 text-amber-900 border-amber-300',
                     };
-                    const companyBadgeStyle = companyColorMap[ord.company] || 'bg-slate-100 text-slate-900 border-slate-300';
+                    const isPartner = partnerItems.some(p => p.toLowerCase() === ord.company?.toLowerCase());
+                    const companyBadgeStyle = isPartner
+                      ? 'bg-purple-100 text-purple-900 border-purple-300'
+                      : (companyColorMap[ord.company] || 'bg-slate-100 text-slate-900 border-slate-300');
 
                     return (
                       <tr key={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
@@ -1191,13 +1282,46 @@ export default function OrdersPage() {
                     <label className="block font-bold text-[#1d2327] mb-1">Company / Person *</label>
                     <select
                       value={orderForm.company}
-                      onChange={(e) => setOrderForm({ ...orderForm, company: e.target.value })}
+                      onChange={(e) => {
+                        const newComp = e.target.value;
+                        const matchingAccounts = getAccountsForEntity(newComp);
+                        const isValidCurrentAcc = matchingAccounts.includes(orderForm.seller_account);
+                        const newSellerAcc = isValidCurrentAcc
+                          ? orderForm.seller_account
+                          : (matchingAccounts.length === 1 ? matchingAccounts[0] : '');
+
+                        setOrderForm({
+                          ...orderForm,
+                          company: newComp,
+                          seller_account: newSellerAcc
+                        });
+                        setSellerSearch(newSellerAcc);
+                        if (matchingAccounts.length > 0 && !isValidCurrentAcc) {
+                          setShowSellerDropdown(true);
+                        }
+                      }}
                       className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
                       required
                     >
-                      {companyOptions.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
+                      <option value="">— Select Company or Partner —</option>
+                      {companyItems.length > 0 && (
+                        <optgroup label="Companies">
+                          {companyItems.map(c => (
+                            <option key={`c-${c}`} value={c}>
+                              [Company] {c}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {partnerItems.length > 0 && (
+                        <optgroup label="Partners">
+                          {partnerItems.map(p => (
+                            <option key={`p-${p}`} value={p}>
+                              [Partner] {p}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
 
@@ -1212,21 +1336,23 @@ export default function OrdersPage() {
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Shipping Date</label>
+                    <label className="block font-bold text-[#1d2327] mb-1">Shipping Date *</label>
                     <input
                       type="date"
                       value={orderForm.shipping_date}
                       onChange={(e) => setOrderForm({ ...orderForm, shipping_date: e.target.value })}
                       className="w-full bg-white border border-[#8c8f94] p-2 font-semibold outline-none focus:border-[#2271b1]"
+                      required
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Last Delivery Date</label>
+                    <label className="block font-bold text-[#1d2327] mb-1">Last Delivery Date *</label>
                     <input
                       type="date"
                       value={orderForm.last_delivery_date}
                       onChange={(e) => setOrderForm({ ...orderForm, last_delivery_date: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 outline-none focus:border-[#2271b1]"
+                      className="w-full bg-white border border-[#8c8f94] p-2 font-semibold outline-none focus:border-[#2271b1]"
+                      required
                     />
                   </div>
                 </div>
@@ -1259,13 +1385,19 @@ export default function OrdersPage() {
                   <div className="relative" ref={sellerDropdownRef}>
                     <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
                       <span>Seller Account *</span>
-                      <span className="text-[10px] text-[#50575e] font-normal">Select or Search</span>
+                      <span className="text-[10px] text-[#50575e] font-normal">
+                        {orderForm.company ? `Filtered for ${orderForm.company}` : 'Select or Search'}
+                      </span>
                     </label>
 
                     <div className="relative">
                       <input
                         type="text"
-                        placeholder="Search or Select Seller Account..."
+                        placeholder={
+                          orderForm.company
+                            ? `Search or Select ${orderForm.company} Account...`
+                            : "Search or Select Seller Account..."
+                        }
                         value={orderForm.seller_account}
                         onFocus={() => {
                           setSellerSearch(orderForm.seller_account);
@@ -1280,7 +1412,8 @@ export default function OrdersPage() {
                         required
                       />
                       <ChevronDown
-                        className="w-4 h-4 text-[#50575e] absolute right-2.5 top-2.5 pointer-events-none cursor-pointer"
+                        onClick={() => setShowSellerDropdown(prev => !prev)}
+                        className="w-4 h-4 text-[#50575e] absolute right-2.5 top-2.5 cursor-pointer"
                       />
                     </div>
 
@@ -1288,7 +1421,16 @@ export default function OrdersPage() {
                     {showSellerDropdown && (
                       <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-[#c3c4c7] rounded-sm shadow-lg max-h-48 overflow-y-auto">
                         {filteredSellerAccounts.length === 0 ? (
-                          <div className="p-2 text-xs text-[#50575e] italic">No matching seller account"{orderForm.seller_account}"</div>
+                          <div className="p-3 text-xs text-[#50575e] bg-[#f9f9f9]">
+                            {orderForm.company ? (
+                              <div>
+                                <div className="font-bold text-[#1d2327] mb-0.5">No linked seller accounts found for "{orderForm.company}"</div>
+                                <div className="text-[11px] text-[#646970]">You can type a custom account name or link one in the Accounts section.</div>
+                              </div>
+                            ) : (
+                              <div className="italic">Please select a Company / Person first to view associated accounts.</div>
+                            )}
+                          </div>
                         ) : (
                           filteredSellerAccounts.map((acc) => (
                             <button
@@ -1374,7 +1516,7 @@ export default function OrdersPage() {
                             <div className="flex items-center gap-2.5 min-w-0">
                               {item.image_url ? (
                                 /* eslint-disable-next-line @next/next/no-img-element */
-                                <img src={item.image_url} alt="" className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0" />
+                                <img src={getImageUrl(item.image_url)} alt="" className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0" />
                               ) : (
                                 <div className="w-7 h-7 rounded-xs bg-[#f6f7f7] border border-[#c3c4c7] flex items-center justify-center text-[#50575e] font-bold text-[10px] shrink-0">
                                   PROD
