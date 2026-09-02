@@ -84,7 +84,12 @@ export default function DashboardOverview() {
   // Helper to verify if an item belongs to user allowed companies
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
-    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase());
+    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin' || currentUser?.role?.name === 'Super Admin') return true;
+    const target = comp.trim().toLowerCase();
+    return companyOptions.some(c => {
+      const allowed = c.trim().toLowerCase();
+      return target === allowed || target.includes(allowed) || allowed.includes(target);
+    });
   };
 
   // Helper for Date Range checking

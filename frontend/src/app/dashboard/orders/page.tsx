@@ -22,6 +22,7 @@ import {
   Link as LinkIcon,
   ExternalLink,
   Calendar,
+  Clock,
   RotateCcw,
   ChevronLeft,
   ChevronRight,
@@ -36,7 +37,8 @@ import {
   DollarSign,
   UserCheck,
   FileText,
-  StickyNote
+  StickyNote,
+  Tag
 } from 'lucide-react';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
@@ -55,7 +57,10 @@ export default function OrdersPage() {
 
   // Filters
   const [selectedCompany, setSelectedCompany] = useState<string>('All');
+  const [selectedSellerAccount, setSelectedSellerAccount] = useState<string>('All');
+  const [selectedPurchaseStatus, setSelectedPurchaseStatus] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
+  const [dateFieldType, setDateFieldType] = useState<string>('order_process_date');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -71,6 +76,16 @@ export default function OrdersPage() {
 
   // Hidden File Input Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const labelFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Label Upload Modal State
+  const [showLabelModal, setShowLabelModal] = useState(false);
+  const [selectedOrderForLabel, setSelectedOrderForLabel] = useState<any>(null);
+  const [labelUploading, setLabelUploading] = useState(false);
+  const [labelExtractedId, setLabelExtractedId] = useState<string | null>(null);
+  const [labelCostInput, setLabelCostInput] = useState<number>(0);
+  const [labelFreeInput, setLabelFreeInput] = useState<boolean>(false);
+  const [labelUploadError, setLabelUploadError] = useState<string | null>(null);
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -319,23 +334,97 @@ export default function OrdersPage() {
     }
   };
 
+  const getDuePurchaseDate = (lastDeliveryDateStr?: string | null, shippingDateStr?: string | null) => {
+    const refDateStr = lastDeliveryDateStr || shippingDateStr;
+    if (!refDateStr) return null;
+    try {
+      const deliveryDate = new Date(refDateStr);
+      if (isNaN(deliveryDate.getTime())) return null;
+
+      // Purchase Due Date is strictly 5 days before Last Delivery Date
+      const dueDate = new Date(deliveryDate);
+      dueDate.setDate(dueDate.getDate() - 5);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const dueDay = new Date(dueDate);
+      dueDay.setHours(0, 0, 0, 0);
+
+      const diffTime = dueDay.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      // Do NOT show if purchase deadline is still far in the future (> 5 days before delivery)
+      if (diffDays > 0) {
+        return null;
+      }
+
+      const dayStr = String(dueDate.getDate()).padStart(2, '0');
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthStr = monthNames[dueDate.getMonth()];
+      const yearStr = dueDate.getFullYear();
+      const formatted = `${dayStr} ${monthStr} ${yearStr}`;
+
+      return {
+        dateStr: dueDate.toISOString().split('T')[0],
+        formatted,
+        daysLeft: diffDays,
+        isOverdue: diffDays < 0,
+        isToday: diffDays === 0,
+      };
+    } catch {
+      return null;
+    }
+  };
+
   // Allowed companies and partners list
   const companyOptions = getAllowedCompanies(currentUser);
+
+  const isAllowedCompany = (comp?: string) => {
+    if (!comp) return true;
+    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin') return true;
+    const target = comp.trim().toLowerCase();
+    return companyOptions.some(c => {
+      const allowed = c.trim().toLowerCase();
+      return target === allowed || target.includes(allowed) || allowed.includes(target);
+    }) ||
+    companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
+    partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
+  };
+
   const companyItems = Array.from(new Set([
     ...companiesList.map((c: any) => c.company_name).filter(Boolean),
+    ...orders.map((o: any) => o.company).filter(Boolean),
     ...companyOptions
   ]));
   const partnerItems = Array.from(new Set(
     partnersList.map((p: any) => p.partner_name).filter(Boolean)
   ));
 
-  const isAllowedCompany = (comp?: string) => {
-    if (!comp) return true;
-    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin') return true;
-    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase()) ||
-           companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
-           partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
-  };
+  const sellerAccountOptions = Array.from(new Set(
+    orders
+      .filter(o => isAllowedCompany(o.company))
+      .map(o => o.seller_account)
+      .filter(Boolean)
+  ));
+
+  // Due purchase count
+  const duePurchaseCount = orders.filter(o => {
+    if (!isAllowedCompany(o.company)) return false;
+    const matchingPur = purchasesList.find((p: any) => p.order_id === o.id);
+    const isStockDone = Boolean(
+      matchingPur && (
+        matchingPur.is_in_stock ||
+        matchingPur.notes?.includes('In-Stock') ||
+        matchingPur.purchase_partner_name === 'In Stock' ||
+        matchingPur.bank === 'In Stock'
+      )
+    );
+    const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+    if (isStockDone || isPurchaseDone) return false;
+    const dueInfo = getDuePurchaseDate(o.last_delivery_date, o.shipping_date);
+    return dueInfo !== null;
+  }).length;
 
   // Filter logic
   useEffect(() => {
@@ -347,41 +436,114 @@ export default function OrdersPage() {
       result = result.filter(o => o.company?.toLowerCase() === selectedCompany.toLowerCase());
     }
 
-    if (selectedStatus !== 'All') {
+    if (selectedSellerAccount !== 'All') {
+      result = result.filter(o => (o.seller_account || '').toLowerCase() === selectedSellerAccount.toLowerCase());
+    }
+
+    if (selectedStatus === 'Due Purchase') {
       result = result.filter(o => {
-        const s = o.order_status || o.status || 'ADBH';
+        const matchingPur = purchasesList.find((p: any) => p.order_id === o.id);
+        const isStockDone = Boolean(
+          matchingPur && (
+            matchingPur.is_in_stock ||
+            matchingPur.notes?.includes('In-Stock') ||
+            matchingPur.purchase_partner_name === 'In Stock' ||
+            matchingPur.bank === 'In Stock'
+          )
+        );
+        const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+        if (isStockDone || isPurchaseDone) return false;
+        return getDuePurchaseDate(o.last_delivery_date, o.shipping_date) !== null;
+      });
+    } else if (selectedStatus !== 'All') {
+      result = result.filter(o => {
+        const s = o.order_status || 'ADBH';
         return s.toLowerCase() === selectedStatus.toLowerCase();
       });
     }
 
+    if (selectedPurchaseStatus !== 'All') {
+      result = result.filter(o => {
+        const matchingPur = purchasesList.find((p: any) => p.order_id === o.id);
+        const isStockDone = Boolean(
+          matchingPur && (
+            matchingPur.is_in_stock ||
+            matchingPur.notes?.includes('In-Stock') ||
+            matchingPur.purchase_partner_name === 'In Stock' ||
+            matchingPur.bank === 'In Stock'
+          )
+        );
+        const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+
+        if (selectedPurchaseStatus === 'due') {
+          if (isStockDone || isPurchaseDone) return false;
+          return getDuePurchaseDate(o.last_delivery_date, o.shipping_date) !== null;
+        }
+        if (selectedPurchaseStatus === 'in_stock') return isStockDone;
+        if (selectedPurchaseStatus === 'purchased') return isPurchaseDone;
+        if (selectedPurchaseStatus === 'pending') return !isStockDone && !isPurchaseDone;
+        return true;
+      });
+    }
+
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+      const q = searchQuery.toLowerCase().trim();
       result = result.filter(o =>
         o.order_number?.toLowerCase().includes(q) ||
         o.shipment_id?.toLowerCase().includes(q) ||
         o.consignee_name?.toLowerCase().includes(q) ||
+        o.buyer_name?.toLowerCase().includes(q) ||
         o.product_name?.toLowerCase().includes(q) ||
-        o.seller_account?.toLowerCase().includes(q)
+        o.seller_account?.toLowerCase().includes(q) ||
+        o.city?.toLowerCase().includes(q) ||
+        o.state?.toLowerCase().includes(q) ||
+        o.zip_code?.toLowerCase().includes(q) ||
+        o.oi?.toLowerCase().includes(q) ||
+        o.mobile_number?.toLowerCase().includes(q)
       );
     }
 
+    const getDateValue = (o: any) => {
+      if (dateFieldType === 'shipping_date') return o.shipping_date;
+      if (dateFieldType === 'last_delivery_date') return o.last_delivery_date;
+      if (dateFieldType === 'arriving_date') {
+        const matchingPur = purchasesList.find((p: any) => p.order_id === o.id);
+        return o.arriving_date || matchingPur?.estimated_shipment_date;
+      }
+      return o.order_process_date || o.order_date;
+    };
+
     if (startDate) {
       result = result.filter(o => {
-        const d = o.order_process_date || o.order_date;
+        const d = getDateValue(o);
         return d && d >= startDate;
       });
     }
 
     if (endDate) {
       result = result.filter(o => {
-        const d = o.order_process_date || o.order_date;
+        const d = getDateValue(o);
         return d && d <= endDate;
       });
     }
 
     setFilteredOrders(result);
     setCurrentPage(1);
-  }, [orders, selectedCompany, selectedStatus, searchQuery, startDate, endDate, currentUser, companiesList, partnersList]);
+  }, [
+    orders,
+    purchasesList,
+    selectedCompany,
+    selectedSellerAccount,
+    selectedPurchaseStatus,
+    selectedStatus,
+    dateFieldType,
+    searchQuery,
+    startDate,
+    endDate,
+    currentUser,
+    companiesList,
+    partnersList
+  ]);
 
   // Helper to strictly get accounts connected to selected Company or Partner
   const getAccountsForEntity = (selectedEntity: string): string[] => {
@@ -501,8 +663,9 @@ export default function OrdersPage() {
 
   const handleStatusChange = async (orderId: number, newStatus: string) => {
     try {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus, order_status: newStatus } : o));
-      await ordersApi.updateStatus(orderId, newStatus);
+      // Only update order_status — never touch status (which is the purchase workflow status)
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, order_status: newStatus } : o));
+      await ordersApi.update(orderId, { order_status: newStatus });
     } catch (err) {
       console.error('Failed to update status', err);
       loadData();
@@ -527,7 +690,7 @@ export default function OrdersPage() {
       (item.product_name && order.product_name && item.product_name.toLowerCase() === order.product_name.toLowerCase())
     );
     const existingPur = purchasesList.find((p: any) => p.order_id === order.id);
-    const isStock = isInStock !== undefined ? isInStock : Boolean(order.order_status === 'in stock' || existingPur?.is_in_stock || existingPur?.notes?.includes('In-Stock'));
+    const isStock = isInStock !== undefined ? isInStock : Boolean(existingPur?.is_in_stock || existingPur?.notes?.includes('In-Stock') || existingPur?.purchase_partner_name === 'In Stock');
 
     setPurchaseForm({
       order_id: order.id,
@@ -617,8 +780,7 @@ export default function OrdersPage() {
         oi: purchaseForm.delivery_code || selectedOrderForPurchase.oi,
         qty: parseInt(String(purchaseForm.qty)) || selectedOrderForPurchase.qty || 1,
         arriving_date: purchaseForm.estimated_shipment_date || null,
-        status: ordStatus,
-        order_status: ordStatus
+        status: ordStatus
       });
 
       setShowPurchaseModal(false);
@@ -683,8 +845,8 @@ export default function OrdersPage() {
     try {
       const payload = {
         ...orderForm,
-        status: orderForm.status || orderForm.order_status || 'ADBH',
-        order_status: orderForm.order_status || orderForm.status || 'ADBH',
+        status: orderForm.status || 'Pending',
+        order_status: orderForm.order_status || 'ADBH',
         price_usd: parseFloat(orderForm.price_usd as any) || 0,
         qty: parseInt(orderForm.qty as any) || 1,
         order_process_date: orderForm.order_process_date || null,
@@ -721,7 +883,7 @@ export default function OrdersPage() {
       product_image: ord.product_image || '',
       qty: ord.qty || 1,
       price_usd: ord.price_usd || ord.product_price || 0,
-      order_status: ord.order_status || ord.status || 'ADBH',
+      order_status: ord.order_status || 'ADBH',
       consignee_name: ord.consignee_name || ord.buyer_name || '',
       shipment_address_1: ord.shipment_address_1 || '',
       shipment_address_2: ord.shipment_address_2 || '',
@@ -730,7 +892,7 @@ export default function OrdersPage() {
       zip_code: ord.zip_code || '',
       mobile_number: ord.mobile_number || '',
       country: ord.country || '',
-      status: ord.status || ord.order_status || 'ADBH'
+      status: ord.status || 'Pending'
     });
     setSellerSearch(ord.seller_account);
     setShowEditModal(true);
@@ -742,8 +904,8 @@ export default function OrdersPage() {
     try {
       const payload = {
         ...orderForm,
-        status: orderForm.status || orderForm.order_status || 'ADBH',
-        order_status: orderForm.order_status || orderForm.status || 'ADBH',
+        status: editingOrder.status || 'Pending',
+        order_status: orderForm.order_status || 'ADBH',
         price_usd: parseFloat(orderForm.price_usd as any) || 0,
         qty: parseInt(orderForm.qty as any) || 1,
         order_process_date: orderForm.order_process_date || null,
@@ -778,6 +940,66 @@ export default function OrdersPage() {
     } finally {
       setUploadingCsv(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const openLabelModal = (order: any) => {
+    setSelectedOrderForLabel(order);
+    setLabelCostInput(order.label_cost_usd || 0);
+    setLabelFreeInput(order.label_free || false);
+    setLabelExtractedId(order.label_tracking_id || null);
+    setLabelUploadError(null);
+    setShowLabelModal(true);
+  };
+
+  const handleLabelFileUpload = async (file: File) => {
+    if (!selectedOrderForLabel) return;
+    setLabelUploading(true);
+    setLabelUploadError(null);
+    try {
+      const res = await ordersApi.uploadLabelPdf(
+        selectedOrderForLabel.id,
+        file,
+        labelFreeInput ? 0 : labelCostInput,
+        labelFreeInput
+      );
+      const data = res.data;
+      setLabelExtractedId(data.tracking_id_extracted || null);
+      // Update order in local state
+      setOrders(prev => prev.map(o => o.id === selectedOrderForLabel.id ? {
+        ...o,
+        label_pdf_url: data.label_pdf_url,
+        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_free: labelFreeInput,
+        label_tracking_id: data.tracking_id_extracted || o.label_tracking_id,
+        shipment_id: data.tracking_id_extracted || o.shipment_id,
+      } : o));
+      if (!data.tracking_id_extracted) {
+        setLabelUploadError('Label saved. No tracking ID could be extracted from this PDF.');
+      }
+    } catch (err: any) {
+      setLabelUploadError(err.response?.data?.detail || 'Failed to upload label PDF.');
+    } finally {
+      setLabelUploading(false);
+      if (labelFileInputRef.current) labelFileInputRef.current.value = '';
+    }
+  };
+
+  const handleSaveLabelCost = async () => {
+    if (!selectedOrderForLabel) return;
+    try {
+      await ordersApi.update(selectedOrderForLabel.id, {
+        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_free: labelFreeInput,
+      });
+      setOrders(prev => prev.map(o => o.id === selectedOrderForLabel.id ? {
+        ...o,
+        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_free: labelFreeInput,
+      } : o));
+      setShowLabelModal(false);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to save label cost.');
     }
   };
 
@@ -867,10 +1089,10 @@ export default function OrdersPage() {
       )}
 
       {/* Filters Bar */}
-      <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-3 shadow-xs rounded-sm flex flex-wrap items-center justify-between gap-3">
-        {/* Left Side: Order Status Filter Pills */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <div className="flex items-center gap-1 flex-wrap">
+      <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-3.5 shadow-xs rounded-sm space-y-3">
+        {/* Row 1: Order Status Filter Pills */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               onClick={() => setSelectedStatus('All')}
               className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border ${selectedStatus === 'All'
@@ -880,12 +1102,33 @@ export default function OrdersPage() {
             >
               All ({orders.filter(o => isAllowedCompany(o.company)).length})
             </button>
+
+            {/* Due Purchase Filter Pill */}
+            <button
+              onClick={() => setSelectedStatus(selectedStatus === 'Due Purchase' ? 'All' : 'Due Purchase')}
+              className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedStatus === 'Due Purchase'
+                ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                : duePurchaseCount > 0
+                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                }`}
+              title="Orders where purchase is due (within 5 days before delivery or overdue)"
+            >
+              <Clock className={`w-3.5 h-3.5 ${selectedStatus === 'Due Purchase' ? 'text-white' : duePurchaseCount > 0 ? 'text-amber-700 animate-pulse' : 'text-[#50575e]'}`} />
+              <span>Due Purchase (5d)</span>
+              {duePurchaseCount > 0 && (
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${selectedStatus === 'Due Purchase' ? 'bg-white text-amber-700' : 'bg-amber-600 text-white'}`}>
+                  {duePurchaseCount}
+                </span>
+              )}
+            </button>
+
             {ORDER_STATUS_OPTIONS.map(st => {
-              const count = orders.filter(o => isAllowedCompany(o.company) && (o.order_status?.toLowerCase() === st.toLowerCase() || o.status?.toLowerCase() === st.toLowerCase())).length;
+              const count = orders.filter(o => isAllowedCompany(o.company) && (o.order_status || 'ADBH').toLowerCase() === st.toLowerCase()).length;
               return (
                 <button
                   key={st}
-                  onClick={() => setSelectedStatus(st)}
+                  onClick={() => setSelectedStatus(selectedStatus.toLowerCase() === st.toLowerCase() ? 'All' : st)}
                   className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border ${selectedStatus.toLowerCase() === st.toLowerCase()
                     ? 'bg-[#2271b1] text-white border-[#135e96]'
                     : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
@@ -896,48 +1139,176 @@ export default function OrdersPage() {
               );
             })}
           </div>
+
+          {/* Quick Clear Button */}
+          {(selectedCompany !== 'All' || selectedSellerAccount !== 'All' || selectedPurchaseStatus !== 'All' || selectedStatus !== 'All' || startDate || endDate || searchQuery) && (
+            <button
+              onClick={() => {
+                setSelectedCompany('All');
+                setSelectedSellerAccount('All');
+                setSelectedPurchaseStatus('All');
+                setSelectedStatus('All');
+                setDateFieldType('order_process_date');
+                setStartDate('');
+                setEndDate('');
+                setSearchQuery('');
+              }}
+              className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-[#f0f0f1] text-[#d63638] font-bold border border-[#c3c4c7] rounded-xs transition-all shadow-xs text-xs ml-auto"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset All Filters</span>
+            </button>
+          )}
         </div>
 
-        {/* Right Side: Date Range & Search */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Date Range & Reset */}
-          <div className="flex items-center gap-1 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-[#50575e]" />
-            <span className="font-semibold text-[#50575e]">Start:</span>
+        {/* Row 2: Secondary Dropdown Filters & Search Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 border-t border-[#e0e0e0]">
+          {/* Company / Person Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Company / Person</label>
+            <select
+              value={selectedCompany}
+              onChange={(e) => setSelectedCompany(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Companies ({orders.filter(o => isAllowedCompany(o.company)).length})</option>
+              {companyItems.map(comp => (
+                <option key={comp} value={comp}>
+                  {comp} ({orders.filter(o => o.company?.toLowerCase() === comp.toLowerCase()).length})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Seller Account Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Seller Account</label>
+            <select
+              value={selectedSellerAccount}
+              onChange={(e) => setSelectedSellerAccount(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Accounts ({sellerAccountOptions.length})</option>
+              {sellerAccountOptions.map(acc => (
+                <option key={acc} value={acc}>
+                  {acc} ({orders.filter(o => o.seller_account?.toLowerCase() === acc.toLowerCase()).length})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Purchase Action Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Purchase Action</label>
+            <select
+              value={selectedPurchaseStatus}
+              onChange={(e) => setSelectedPurchaseStatus(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Purchase Actions</option>
+              <option value="due">⚠️ Due Purchase (≤ 5d)</option>
+              <option value="in_stock">🚚 In Stock</option>
+              <option value="purchased">✓ Purchased</option>
+              <option value="pending">⏳ Pending Purchase</option>
+            </select>
+          </div>
+
+          {/* Date Field Type */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Filter Date By</label>
+            <select
+              value={dateFieldType}
+              onChange={(e) => setDateFieldType(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="order_process_date">Order Process Date</option>
+              <option value="shipping_date">Shipping Date</option>
+              <option value="last_delivery_date">Last Delivery Date</option>
+              <option value="arriving_date">Arriving Date</option>
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Start Date</label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+              className="w-full px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs font-medium outline-none focus:border-[#2271b1]"
             />
-            <span className="font-semibold text-[#50575e]">End:</span>
+          </div>
+
+          {/* End Date */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">End Date</label>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+              className="w-full px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs font-medium outline-none focus:border-[#2271b1]"
             />
-            {(startDate || endDate || selectedStatus !== 'All' || searchQuery) && (
+          </div>
+        </div>
+
+        {/* Row 3: Search Box & Active Filter Chips */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-[#e0e0e0]">
+          {/* Search Box */}
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-[#50575e] absolute left-3 top-2" />
+            <input
+              type="text"
+              placeholder="Search Order #, Consignee, Product, Seller Account..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white border border-[#8c8f94] text-xs pl-9 pr-3 py-1.5 rounded-xs focus:border-[#2271b1] outline-none font-medium"
+            />
+            {searchQuery && (
               <button
-                onClick={() => { setStartDate(''); setEndDate(''); setSelectedStatus('All'); setSearchQuery(''); }}
-                className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-[#f0f0f1] text-[#d63638] font-bold border border-[#c3c4c7] rounded-xs transition-all ml-1 shadow-xs"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-2 text-[#50575e] hover:text-[#1d2327] font-bold text-xs"
               >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset</span>
+                ✕
               </button>
             )}
           </div>
 
-          {/* Search */}
-          <div className="relative w-64">
-            <Search className="w-4 h-4 text-[#50575e] absolute left-3 top-2.5" />
-            <input
-              type="text"
-              placeholder="Search Order, Consignee, Product..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white border border-[#8c8f94] text-xs pl-9 pr-3 py-1.5 rounded-sm focus:border-[#2271b1] outline-none"
-            />
+          {/* Active Results Counter & Filter Tags */}
+          <div className="flex items-center gap-1.5 flex-wrap text-xs text-[#50575e]">
+            <span className="font-semibold text-[#1d2327]">Showing:</span>
+            <span className="font-bold text-[#2271b1]">{filteredOrders.length}</span>
+            <span>of {orders.filter(o => isAllowedCompany(o.company)).length} orders</span>
+
+            {selectedCompany !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#e8f3fc] text-[#2271b1] font-bold rounded-xs border border-[#72aee6] text-[11px]">
+                Company: {selectedCompany}
+                <button onClick={() => setSelectedCompany('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
+            {selectedSellerAccount !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#e8f3fc] text-[#2271b1] font-bold rounded-xs border border-[#72aee6] text-[11px]">
+                Seller: {selectedSellerAccount}
+                <button onClick={() => setSelectedSellerAccount('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
+            {selectedPurchaseStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-900 font-bold rounded-xs border border-amber-300 text-[11px]">
+                Purchase: {selectedPurchaseStatus === 'due' ? 'Due (5d)' : selectedPurchaseStatus}
+                <button onClick={() => setSelectedPurchaseStatus('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
+            {selectedStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#f0f0f1] text-[#1d2327] font-bold rounded-xs border border-[#c3c4c7] text-[11px]">
+                Status: {selectedStatus}
+                <button onClick={() => setSelectedStatus('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
+            {(startDate || endDate) && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#f0f0f1] text-[#1d2327] font-bold rounded-xs border border-[#c3c4c7] text-[11px]">
+                Date ({dateFieldType.replace(/_/g, ' ')}): {startDate || '...'} to {endDate || '...'}
+                <button onClick={() => { setStartDate(''); setEndDate(''); }} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -982,6 +1353,7 @@ export default function OrdersPage() {
                     <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>
                     <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>
                     <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>
+                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[140px]">Label</th>
                     <th className="py-2.5 px-3 text-center sticky right-0 bg-[#f0f0f1] border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-20">Actions</th>
                   </tr>
                 </thead>
@@ -1051,40 +1423,44 @@ export default function OrdersPage() {
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">${(ord.price_usd || ord.product_price || 0).toFixed(2)}</td>
                         <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
-                          <select
-                            value={(() => {
-                              const current = (ord.order_status || ord.status || 'ADBH').trim();
-                              const matched = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === current.toLowerCase());
-                              return matched || current;
-                            })()}
-                            onChange={(e) => handleStatusChange(ord.id, e.target.value)}
-                            className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${(() => {
-                              const s = (ord.order_status || ord.status || '').toLowerCase().trim();
-                              if (s === 'in stock' || s === 'instock') return 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200';
-                              if (s === 'adbh') return 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
-                              if (s === 'canton') return 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200';
-                              if (s === 'doweta') return 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200';
-                              return 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200';
-                            })()}`}
-                          >
-                            {ORDER_STATUS_OPTIONS.map((status) => (
-                              <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
-                                {status}
-                              </option>
-                            ))}
-                          </select>
+                          {(() => {
+                            const cur = (ord.order_status || 'ADBH').trim();
+                            const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
+                            const s = matchedStatus.toLowerCase();
+                            const colorClass = 
+                              (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
+                              s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
+                              s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
+                              s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
+                              'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
+
+                            return (
+                              <select
+                                value={matchedStatus}
+                                onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                                className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
+                              >
+                                {ORDER_STATUS_OPTIONS.map((status) => (
+                                  <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
+                                    {status}
+                                  </option>
+                                ))}
+                              </select>
+                            );
+                          })()}
                         </td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
                           {(() => {
                             const matchingPur = purchasesList.find((p: any) => p.order_id === ord.id);
-                            const isStockDone = (
-                              (ord.order_status || '').toLowerCase().trim() === 'in stock' ||
-                              (ord.status || '').toLowerCase().trim() === 'in stock' ||
-                              matchingPur?.is_in_stock ||
-                              matchingPur?.notes?.includes('In-Stock') ||
-                              matchingPur?.purchase_partner_name === 'In Stock'
+                            const isStockDone = Boolean(
+                              matchingPur && (
+                                matchingPur.is_in_stock ||
+                                matchingPur.notes?.includes('In-Stock') ||
+                                matchingPur.purchase_partner_name === 'In Stock' ||
+                                matchingPur.bank === 'In Stock'
+                              )
                             );
-                            const isPurchaseDone = Boolean(matchingPur || (ord.purchase_cost_inr && ord.purchase_cost_inr > 0));
+                            const isPurchaseDone = Boolean(matchingPur && !isStockDone);
                             const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
 
                             if (isStockDone) {
@@ -1140,24 +1516,46 @@ export default function OrdersPage() {
                               );
                             }
 
+                            const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
+
                             return (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  onClick={() => handleMarkInStock(ord)}
-                                  className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
-                                  title="Item is already in stock - send directly to Shipments"
-                                >
-                                  <Truck className="w-3 h-3" />
-                                  <span>In Stock</span>
-                                </button>
-                                <button
-                                  onClick={() => openPurchaseModal(ord)}
-                                  className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
-                                  title="Create purchase order entry"
-                                >
-                                  <Plus className="w-3 h-3" />
-                                  <span>Purchase Entry</span>
-                                </button>
+                              <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => handleMarkInStock(ord)}
+                                    className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
+                                    title="Item is already in stock - send directly to Shipments"
+                                  >
+                                    <Truck className="w-3 h-3" />
+                                    <span>In Stock</span>
+                                  </button>
+                                  <button
+                                    onClick={() => openPurchaseModal(ord)}
+                                    className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
+                                    title="Create purchase order entry"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Purchase Entry</span>
+                                  </button>
+                                </div>
+                                {dueInfo && (
+                                  <span
+                                    className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${
+                                      dueInfo.isOverdue
+                                        ? 'bg-red-100 text-red-900 border-red-300'
+                                        : 'bg-amber-100 text-amber-900 border-amber-300'
+                                    }`}
+                                    title={`Purchase Due Date: ${dueInfo.formatted} (5 days before delivery: ${ord.last_delivery_date || ord.shipping_date})`}
+                                  >
+                                    <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
+                                    <span>
+                                      Due: {dueInfo.formatted}
+                                      {dueInfo.isOverdue
+                                        ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)`
+                                        : ' (Due Today!)'}
+                                    </span>
+                                  </span>
+                                )}
                               </div>
                             );
                           })()}
@@ -1170,6 +1568,46 @@ export default function OrdersPage() {
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-center">{ord.zip_code || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] text-center">{ord.mobile_number || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold uppercase text-center">{ord.country || 'USA'}</td>
+                        {/* ── Label Cell ── */}
+                        <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
+                          {ord.label_pdf_url ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <a
+                                href={`/backend-api/orders/${ord.id}/download-label?download=1`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download={`${ord.label_tracking_id || ord.order_number || 'label'} - ${ord.product_name}.pdf`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-300 rounded-xs text-[11px] font-bold hover:bg-indigo-200 transition-colors shadow-2xs"
+                                title="Download Label PDF"
+                              >
+                                <FileText className="w-3 h-3" />
+                                <span>Label</span>
+                              </a>
+                              {canEdit && (
+                                <button
+                                  onClick={() => openLabelModal(ord)}
+                                  className="p-1 text-[#2271b1] hover:text-[#135e96] hover:bg-[#f0f0f1] rounded-xs transition-colors"
+                                  title="Update label PDF & cost"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            canEdit ? (
+                              <button
+                                onClick={() => openLabelModal(ord)}
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-dashed border-[#8c8f94] hover:border-[#2271b1] hover:bg-[#e8f3fc] text-[#50575e] hover:text-[#2271b1] rounded-xs text-[11px] font-semibold transition-all"
+                                title="Upload label PDF"
+                              >
+                                <Tag className="w-3 h-3" />
+                                <span>Label</span>
+                              </button>
+                            ) : (
+                              <span className="text-[#a7aaad] text-[11px]">—</span>
+                            )
+                          )}
+                        </td>
                         <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'
                           }`}>
                           <div className="flex items-center justify-center gap-1.5">
@@ -1507,7 +1945,6 @@ export default function OrdersPage() {
                                 product_name: item.product_name,
                                 product_image: item.image_url || prev.product_image,
                                 price_usd: item.price || prev.price_usd,
-                                ...(item.stock_quantity > 0 ? { order_status: 'in stock' } : {})
                               }));
                               setShowProductDropdown(false);
                             }}
@@ -1731,7 +2168,7 @@ export default function OrdersPage() {
                   </label>
                   <select
                     value={orderForm.order_status || 'ADBH'}
-                    onChange={(e) => setOrderForm({ ...orderForm, order_status: e.target.value, status: e.target.value })}
+                    onChange={(e) => setOrderForm({ ...orderForm, order_status: e.target.value })}
                     className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
                     required
                   >
@@ -1927,178 +2364,221 @@ export default function OrdersPage() {
                   )}
                   <span>
                     {purchaseForm.is_in_stock
-                      ? 'In-Stock Mode: Only Purchase Price (₹) is required. All other supplier fields are optional.'
+                      ? 'In-Stock Mode: Enter Quantity and Purchase Price (₹) to confirm in-stock fulfillment.'
                       : 'Purchase Mode: All fields marked with (*) are mandatory.'}
                   </span>
                 </div>
 
-                {/* Row 1: Quantity & SKU */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
-                        <span>Quantity (Qty) *</span>
-                      </span>
-                      <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrderForPurchase?.qty || 1}</span>
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={purchaseForm.qty}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required
-                    />
+                {purchaseForm.is_in_stock ? (
+                  /* IN-STOCK MODE: ONLY QUANTITY & PURCHASE PRICE */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>Quantity (Qty) *</span>
+                        </span>
+                        <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrderForPurchase?.qty || 1}</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={purchaseForm.qty}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Purchase Price (INR ₹) *</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="e.g. 1500.00"
+                        value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        required
+                      />
+                    </div>
                   </div>
+                ) : (
+                  /* REGULAR VENDOR PURCHASE MODE: ALL FIELDS */
+                  <>
+                    {/* Row 1: Quantity & SKU */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
+                            <span>Quantity (Qty) *</span>
+                          </span>
+                          <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrderForPurchase?.qty || 1}</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={purchaseForm.qty}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Barcode className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>SKU Number</span>
-                      <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. SKU-JEANS-001"
-                      value={purchaseForm.sku}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, sku: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Barcode className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>SKU Number</span>
+                          <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. SKU-JEANS-001"
+                          value={purchaseForm.sku}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, sku: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 2: GST / Non GST & Bank */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Receipt className="w-3.5 h-3.5 text-blue-600" />
-                      <span>GST / Non GST {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <select
-                      value={purchaseForm.gst_type}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    >
-                      <option value="GST">GST</option>
-                      <option value="Non GST">Non GST</option>
-                    </select>
-                  </div>
+                    {/* Row 2: GST / Non GST & Bank */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Receipt className="w-3.5 h-3.5 text-blue-600" />
+                          <span>GST / Non GST *</span>
+                        </label>
+                        <select
+                          value={purchaseForm.gst_type}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        >
+                          <option value="GST">GST</option>
+                          <option value="Non GST">Non GST</option>
+                        </select>
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Landmark className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Bank / Payment Mode {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder={purchaseForm.is_in_stock ? "e.g. HDFC Bank, ICICI (Optional)" : "e.g. HDFC Bank, ICICI, SBI, Bank Transfer"}
-                      value={purchaseForm.bank}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Landmark className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Bank / Payment Mode *</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. HDFC Bank, ICICI, SBI, Bank Transfer"
+                          value={purchaseForm.bank}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        >
+                        </input>
+                      </div>
+                    </div>
 
-                {/* Row 3: Purchase Amount & Purchase Partner */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{purchaseForm.is_in_stock ? 'Purchase Price (INR ₹) *' : 'Purchase Amount (INR ₹) *'}</span>
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      placeholder="e.g. 1500.00"
-                      value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required
-                    />
-                  </div>
+                    {/* Row 3: Purchase Amount & Purchase Partner */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Purchase Amount (INR ₹) *</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="e.g. 1500.00"
+                          value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <UserCheck className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>Vendor / Supplier Name {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder={purchaseForm.is_in_stock ? "e.g. In-Stock Supplier (Optional)" : "e.g. Aryastore Partner / Supplier Name"}
-                      value={purchaseForm.purchase_partner_name}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_partner_name: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <UserCheck className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>Vendor / Supplier Name *</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Aryastore Partner / Supplier Name"
+                          value={purchaseForm.purchase_partner_name}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_partner_name: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 4: Arrived Delivery Date & PO Number */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Arrived Delivery Date {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="date"
-                      value={purchaseForm.estimated_shipment_date}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
+                    {/* Row 4: Arrived Delivery Date & PO Number */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Arrived Delivery Date *</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={purchaseForm.estimated_shipment_date}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <FileText className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>PO Number</span>
-                      <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. PO-2026-0012"
-                      value={purchaseForm.po_number}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, po_number: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <FileText className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>PO Number</span>
+                          <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. PO-2026-0012"
+                          value={purchaseForm.po_number}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, po_number: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 5: Delivery Code (OI) */}
-                <div>
-                  <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                    <Truck className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Delivery Code / OI / Tracking</span>
-                    <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. OI-883921 / Tracking Code"
-                    value={purchaseForm.delivery_code}
-                    onChange={(e) => setPurchaseForm({ ...purchaseForm, delivery_code: e.target.value })}
-                    className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                  />
-                </div>
+                    {/* Row 5: Delivery Code (OI) */}
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Delivery Code / OI / Tracking</span>
+                        <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. OI-883921 / Tracking Code"
+                        value={purchaseForm.delivery_code}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, delivery_code: e.target.value })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                      />
+                    </div>
 
-                {/* Row 6: Notes / Remarks */}
-                <div>
-                  <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                    <StickyNote className="w-3.5 h-3.5 text-slate-600" />
-                    <span>Purchase Notes / Remarks</span>
-                    <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Expedited customs clearance / in-stock warehouse"
-                    value={purchaseForm.notes}
-                    onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })}
-                    className="w-full bg-white border border-[#8c8f94] p-2 outline-none focus:border-[#2271b1] rounded-xs"
-                  />
-                </div>
+                    {/* Row 6: Notes / Remarks */}
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <StickyNote className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Purchase Notes / Remarks</span>
+                        <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Expedited customs clearance / supplier notes"
+                        value={purchaseForm.notes}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 outline-none focus:border-[#2271b1] rounded-xs"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Modal Footer */}
@@ -2131,6 +2611,145 @@ export default function OrdersPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Label Upload Modal ── */}
+      {showLabelModal && selectedOrderForLabel && (
+        <div className="fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4 bg-black/50">
+          <div className="modal-content bg-white border border-[#c3c4c7] w-full max-w-md rounded-sm shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="px-5 py-3.5 border-b border-[#c3c4c7] bg-[#f6f7f7] flex items-center justify-between">
+              <h2 className="text-sm font-bold text-[#1d2327] flex items-center gap-2">
+                <Tag className="w-4 h-4 text-indigo-600" />
+                Label — Order {selectedOrderForLabel.order_number}
+              </h2>
+              <button
+                onClick={() => setShowLabelModal(false)}
+                className="text-[#50575e] hover:text-[#1d2327] p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              {/* Upload PDF */}
+              <div>
+                <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-1.5">
+                  Upload Label PDF
+                </label>
+                <div
+                  className="border-2 border-dashed border-[#c3c4c7] rounded-sm p-4 text-center hover:border-[#2271b1] transition-colors cursor-pointer"
+                  onClick={() => labelFileInputRef.current?.click()}
+                >
+                  {labelUploading ? (
+                    <div className="flex items-center justify-center gap-2 text-[#2271b1]">
+                      <div className="w-4 h-4 border-2 border-[#2271b1] border-t-transparent rounded-full animate-spin" />
+                      <span className="font-semibold">Uploading & extracting tracking ID...</span>
+                    </div>
+                  ) : selectedOrderForLabel.label_pdf_url ? (
+                    <div className="flex flex-col items-center gap-1">
+                      <FileText className="w-6 h-6 text-indigo-500" />
+                      <span className="text-[#2271b1] font-bold text-[11px]">Label uploaded ✓</span>
+                      <span className="text-[#50575e] text-[10px]">Click to replace with new PDF</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-1 text-[#50575e]">
+                      <Upload className="w-6 h-6 text-[#a7aaad]" />
+                      <span className="font-semibold">Click to upload label PDF</span>
+                      <span className="text-[10px]">PDF files only • Tracking ID will be auto-extracted</span>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={labelFileInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleLabelFileUpload(file);
+                  }}
+                />
+              </div>
+
+              {/* Extracted Tracking ID */}
+              {labelExtractedId && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-sm p-3">
+                  <div className="text-[10px] font-bold text-indigo-700 uppercase mb-1 flex items-center gap-1">
+                    <Barcode className="w-3.5 h-3.5" />
+                    Extracted Tracking ID (set as Shipment ID)
+                  </div>
+                  <div className="font-mono font-bold text-indigo-900 text-[13px] break-all">{labelExtractedId}</div>
+                </div>
+              )}
+
+              {/* Error / Info */}
+              {labelUploadError && (
+                <div className={`p-2.5 rounded-sm border text-[11px] flex items-start gap-2 ${
+                  labelUploadError.startsWith('Label saved') 
+                    ? 'bg-amber-50 border-amber-300 text-amber-900' 
+                    : 'bg-red-50 border-red-300 text-red-900'
+                }`}>
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{labelUploadError}</span>
+                </div>
+              )}
+
+              {/* Label Cost */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-1">
+                    Label Cost (USD $)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={labelFreeInput ? '' : labelCostInput}
+                    disabled={labelFreeInput}
+                    onChange={(e) => setLabelCostInput(parseFloat(e.target.value) || 0)}
+                    placeholder={labelFreeInput ? 'Free' : '0.00'}
+                    className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs outline-none focus:border-[#2271b1] disabled:bg-[#f0f0f1] disabled:text-[#a7aaad]"
+                  />
+                </div>
+                <div className="flex flex-col justify-end pb-0.5">
+                  <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-1">
+                    Free Label?
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLabelFreeInput(!labelFreeInput)}
+                      className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${labelFreeInput ? 'bg-emerald-500' : 'bg-[#c3c4c7]'}`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${labelFreeInput ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                    <span className={`text-xs font-bold ${labelFreeInput ? 'text-emerald-700' : 'text-[#50575e]'}`}>
+                      {labelFreeInput ? 'Yes — Free' : 'No — Paid'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer Buttons */}
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#e0e0e0]">
+                <button
+                  onClick={() => setShowLabelModal(false)}
+                  className="px-3.5 py-1.5 bg-white border border-[#c3c4c7] hover:bg-[#f0f0f1] text-[#2c3338] text-xs font-bold rounded-sm transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveLabelCost}
+                  className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white text-xs font-bold rounded-sm transition-all flex items-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Save Label Info
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

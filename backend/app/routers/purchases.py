@@ -97,12 +97,12 @@ def create_purchase(
     )
     db.add(purchase)
     
-    # Sync costs & delivery code back to Order
+    # Sync costs & delivery code back to Order (no status changes)
     if pur_in.purchase_value:
         order.purchase_cost_inr = pur_in.purchase_value + (pur_in.other_cost or 0.0) + (pur_in.extra_cost or 0.0)
     if pur_in.delivery_code:
         order.oi = pur_in.delivery_code
-    order.status = "Purchased"
+    # NOTE: Order Status (order_status) is NOT touched by purchase actions
 
     # Store excess quantity into Inventory for future orders
     purchased_qty = pur_in.qty or order.qty or 1
@@ -185,15 +185,16 @@ def update_purchase(
     if pur_in.company is not None:
         purchase.company = pur_in.company
 
-    # Sync back to associated Order
+    # Sync back to associated Order (costs & delivery code only — no status changes)
     order = db.query(Order).filter(Order.id == purchase.order_id).first()
     if order:
         if purchase.purchase_value:
             order.purchase_cost_inr = purchase.purchase_value
         if purchase.delivery_code:
             order.oi = purchase.delivery_code
-    
-    # If status is updated to "Received", add stock to Inventory & set Order to
+
+    # If status is updated to "Received", update Inventory stock only
+    # NOTE: Order status is NOT changed — it stays as whatever the user set
     if pur_in.status is not None:
         previous_status = purchase.status
         purchase.status = pur_in.status
@@ -201,7 +202,7 @@ def update_purchase(
         if ("Received" in pur_in.status) and ("Received" not in (previous_status or "")):
             order = db.query(Order).filter(Order.id == purchase.order_id).first()
             if order:
-                # Update inventory stock
+                # Update inventory stock only
                 inv = None
                 if order.product_id:
                     inv = db.query(Inventory).filter(Inventory.id == order.product_id).first()
@@ -211,7 +212,6 @@ def update_purchase(
                 if inv:
                     inv.stock_quantity += purchase.qty
                 else:
-                    # Create new inventory entry if it doesn't exist yet
                     inv = Inventory(
                         product_name=order.product_name,
                         price=order.product_price,
@@ -220,9 +220,7 @@ def update_purchase(
                     db.add(inv)
                     db.flush()
                     order.product_id = inv.id
-
-                # Now order has enough stock
-                order.status = "Ready to Ship"
+                # Order status is intentionally NOT changed here
 
     db.commit()
     db.refresh(purchase)

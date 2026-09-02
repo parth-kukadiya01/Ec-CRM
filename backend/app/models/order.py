@@ -48,6 +48,12 @@ class Order(Base):
     shipment_cost = Column(Float, nullable=True, default=0.0)
     status = Column(String(50), nullable=True, default="Pending")
 
+    # Label fields
+    label_pdf_url = Column(Text, nullable=True)
+    label_cost_usd = Column(Float, nullable=True, default=0.0)
+    label_free = Column(Boolean, nullable=True, default=False)
+    label_tracking_id = Column(String(200), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Inventory")

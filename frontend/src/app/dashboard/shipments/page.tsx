@@ -49,10 +49,11 @@ export default function ShipmentsPage() {
   const [currentPageReady, setCurrentPageReady] = useState<number>(1);
   const [currentPageDispatched, setCurrentPageDispatched] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+  const [receivingOrderId, setReceivingOrderId] = useState<number | null>(null);
 
-  const loadAllData = async () => {
+  const loadAllData = async (showSpinner = true) => {
     try {
-      setLoading(true);
+      if (showSpinner) setLoading(true);
       const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
       const shipRes = await shipmentsApi.list().catch(() => ({ data: [] }));
       const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
@@ -67,9 +68,12 @@ export default function ShipmentsPage() {
       const existingShipmentOrderIds = new Set(shipList.map((s: any) => s.order_id));
       const purOrderIds = new Set(purList.map((p: any) => String(p.order_id)));
 
-      // Only orders that have a purchase action completed show in Shipments:
+      // Orders with any Purchase Price (INR ₹) done or completed purchase entry show in Shipments:
       const ready = allOrders.filter((ord: any) =>
-        purOrderIds.has(String(ord.id)) &&
+        (
+          purOrderIds.has(String(ord.id)) ||
+          (ord.purchase_cost_inr !== null && ord.purchase_cost_inr !== undefined && Number(ord.purchase_cost_inr) > 0)
+        ) &&
         ord.status !== 'Shipped' &&
         ord.status !== 'Delivered' &&
         ord.status !== 'Cancelled'
@@ -83,7 +87,7 @@ export default function ShipmentsPage() {
           order_id: o.id,
           order_number: o.order_number || `#ORD-${o.id}`,
           tracking_id: o.shipment_id || o.oi || `TRK-${o.id}`,
-          shipment_partner: o.delivery_service || 'FedEx Express',
+          shipment_partner: o.delivery_service,
           product_name: o.product_name,
           weight: 1.0,
           dimensions: '10 x 5 x 8 cm',
@@ -98,16 +102,16 @@ export default function ShipmentsPage() {
 
       setReadyOrders(ready);
       setShipments([...shipList, ...autoShippedOrders]);
-      setCurrentUser(meRes?.data || null);
+      if (meRes?.data) setCurrentUser(meRes.data);
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadAllData();
+    loadAllData(true);
   }, []);
 
   // Reset pagination on filter change
@@ -139,7 +143,12 @@ export default function ShipmentsPage() {
   const companyOptions = getAllowedCompanies(currentUser);
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
-    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase());
+    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin' || currentUser?.role?.name === 'Super Admin') return true;
+    const target = comp.trim().toLowerCase();
+    return companyOptions.some(c => {
+      const allowed = c.trim().toLowerCase();
+      return target === allowed || target.includes(allowed) || allowed.includes(target);
+    });
   };
 
   // Date and Search Filtered Datasets
@@ -199,12 +208,18 @@ export default function ShipmentsPage() {
   const openDispatchModal = (order: any) => {
     setSelectedOrder(order);
     const defaultAwb = order.shipment_id || order.oi || `AWB${Math.floor(1000000 + Math.random() * 9000000)}`;
+    // Pre-fill forwarding_number from label tracking ID (extracted from label PDF)
+    const forwardingNum = order.label_tracking_id || '';
+    // Pre-fill label cost from order's label cost
+    const labelCostUsd = order.label_free ? 0 : (order.label_cost_usd || 0);
+    const exRate = 99.0;
+    const labelCostInr = parseFloat((labelCostUsd * exRate).toFixed(2));
     setShipmentForm({
       order_id: order.id,
       order_number: order.order_number || `#ORD-${order.id}`,
       shipment_partner: 'RBS Online',
       awb_number: defaultAwb,
-      forwarding_number: '',
+      forwarding_number: forwardingNum,
       tracking_id: defaultAwb,
       product_name: order.product_name || '',
       weight: 0.5,
@@ -214,9 +229,9 @@ export default function ShipmentsPage() {
       domestic_cost: 0,
       international_cost: 0,
       dump_cost: 0,
-      label_cost_usd: 0,
-      exchange_rate: 99.0,
-      label_cost_inr: 0,
+      label_cost_usd: labelCostUsd,
+      exchange_rate: exRate,
+      label_cost_inr: labelCostInr,
       shipment_cost: 0,
     });
     setShowDispatchModal(true);
@@ -271,7 +286,6 @@ export default function ShipmentsPage() {
       // Automatically update order status to 'Shipped'
       await ordersApi.update(targetOrderId, {
         status: 'Shipped',
-        order_status: 'Shipped',
         delivery_service: shipmentForm.shipment_partner,
         shipment_id: awbVal,
         shipment_cost: sCost
@@ -279,7 +293,7 @@ export default function ShipmentsPage() {
 
       setShowDispatchModal(false);
       setActiveTab('dispatched');
-      loadAllData();
+      loadAllData(false);
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error creating shipment';
@@ -289,12 +303,12 @@ export default function ShipmentsPage() {
 
   const handleOrderStatusChange = async (orderId: number, newStatus: string) => {
     try {
-      await ordersApi.update(orderId, { status: newStatus, order_status: newStatus });
+      await ordersApi.update(orderId, { status: newStatus });
       const matchingPur = purchases.find((p: any) => p.order_id === orderId);
       if (matchingPur && (newStatus === 'Ready to Ship' || newStatus === 'Ready for Shipment' || newStatus === 'In Stock')) {
         await purchasesApi.update(matchingPur.id, { status: 'Received' });
       }
-      loadAllData();
+      loadAllData(false);
     } catch (err) {
       console.error(err);
       alert('Error updating order status');
@@ -303,15 +317,33 @@ export default function ShipmentsPage() {
 
   const handleQuickReceive = async (ord: any) => {
     try {
+      setReceivingOrderId(ord.id);
+      // 1. Instant optimistic state update — zero flicker, zero page reload!
+      setPurchases(prev =>
+        prev.map(p => p.order_id === ord.id ? { ...p, status: 'Received' } : p)
+      );
+      setReadyOrders(prev =>
+        prev.map(o => o.id === ord.id ? { ...o, status: 'Ready to Ship' } : o)
+      );
+      setAllOrdersList(prev =>
+        prev.map(o => o.id === ord.id ? { ...o, status: 'Ready to Ship' } : o)
+      );
+
+      // 2. Perform backend API updates
       const pur = purchases.find((p: any) => p.order_id === ord.id);
       if (pur?.id) {
         await purchasesApi.update(pur.id, { status: 'Received' });
       }
-      await ordersApi.update(ord.id, { status: 'Ready to Ship', order_status: 'Ready to Ship' });
-      loadAllData();
+      await ordersApi.update(ord.id, { status: 'Ready to Ship' });
+
+      // 3. Silent background refresh (showSpinner = false)
+      await loadAllData(false);
     } catch (err) {
       console.error(err);
       alert('Error marking purchase as received');
+      loadAllData(false);
+    } finally {
+      setReceivingOrderId(null);
     }
   };
 
@@ -394,7 +426,7 @@ export default function ShipmentsPage() {
         shipment_cost: sCost,
       });
       setEditingShipment(null);
-      loadAllData();
+      loadAllData(false);
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error updating shipment details';
@@ -406,11 +438,11 @@ export default function ShipmentsPage() {
     try {
       if (typeof id === 'string' && id.startsWith('ord-')) {
         const orderId = parseInt(id.replace('ord-', ''));
-        await ordersApi.update(orderId, { status: newStatus, order_status: newStatus });
+        await ordersApi.update(orderId, { status: newStatus });
       } else {
         await shipmentsApi.update(Number(id), { status: newStatus });
       }
-      loadAllData();
+      loadAllData(false);
     } catch (err) {
       console.error(err);
       alert('Error updating shipment status');
@@ -422,11 +454,11 @@ export default function ShipmentsPage() {
       try {
         if (typeof id === 'string' && id.startsWith('ord-')) {
           const orderId = parseInt(id.replace('ord-', ''));
-          await ordersApi.update(orderId, { status: 'Ready to Ship', order_status: 'Ready to Ship' });
+          await ordersApi.update(orderId, { status: 'Ready to Ship' });
         } else {
           await shipmentsApi.delete(Number(id));
         }
-        loadAllData();
+        loadAllData(false);
       } catch (err) {
         console.error(err);
         alert('Error deleting shipment');
@@ -610,11 +642,17 @@ export default function ShipmentsPage() {
                     {paginatedReadyOrders.map((ord, idx) => {
                       const pur = purchases.find((p: any) => p.order_id === ord.id);
                       const isInStock =
+                        (ord.order_status || '').toLowerCase() === 'in stock' ||
                         ord.status === 'In Stock' ||
-                        (pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+                        Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+
+                      const isPurchaseReceived = Boolean(
+                        pur && (pur.status === 'Received' || pur.status === 'Completed')
+                      );
 
                       const isPurchasePending =
                         !isInStock &&
+                        !isPurchaseReceived &&
                         (ord.status === 'Purchase Pending' || ord.status === 'Pending' || (pur && pur.status !== 'Received'));
 
                       return (
@@ -703,11 +741,16 @@ export default function ShipmentsPage() {
                               <div className="flex items-center justify-end gap-1.5">
                                 <button
                                   onClick={() => handleQuickReceive(ord)}
-                                  className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs"
+                                  disabled={receivingOrderId === ord.id}
+                                  className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs disabled:opacity-50"
                                   title="Mark Purchase as Received to enable Dispatch"
                                 >
-                                  <PackageCheck className="w-3 h-3" />
-                                  <span>Mark Received</span>
+                                  {receivingOrderId === ord.id ? (
+                                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <PackageCheck className="w-3 h-3" />
+                                  )}
+                                  <span>{receivingOrderId === ord.id ? 'Receiving...' : 'Mark Received'}</span>
                                 </button>
                                 <button
                                   disabled
@@ -1120,7 +1163,7 @@ export default function ShipmentsPage() {
                   </div>
                 </div>
 
-                {/* Row 2: Forwarding Number & (Shipping Cost if Shiprocket) */}
+                {/* Row 2: Forwarding Number & (Shipping Cost if Shiprocket OR Label PDF if RBS Online) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
@@ -1136,7 +1179,7 @@ export default function ShipmentsPage() {
                     />
                   </div>
 
-                  {shipmentForm.shipment_partner === 'Shiprocket' && (
+                  {shipmentForm.shipment_partner === 'Shiprocket' ? (
                     <div>
                       <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
                         <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
@@ -1152,8 +1195,51 @@ export default function ShipmentsPage() {
                         required
                       />
                     </div>
+                  ) : (
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Label PDF</span>
+                      </label>
+                      {selectedOrder?.label_pdf_url ? (
+                        <a
+                          href={`/backend-api/orders/${selectedOrder.id}/download-label?download=1`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download={`${selectedOrder.label_tracking_id || selectedOrder.order_number || 'label'} - ${selectedOrder.product_name}.pdf`}
+                          className="w-full h-[38px] inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] rounded-xs transition-colors shadow-xs"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Download Label PDF</span>
+                        </a>
+                      ) : (
+                        <div className="w-full h-[38px] flex items-center justify-center bg-[#f0f0f1] text-[#50575e] font-semibold text-[11px] rounded-xs border border-[#c3c4c7]">
+                          No Label PDF Uploaded
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
+
+                {/* If Shiprocket and has label PDF, show below */}
+                {shipmentForm.shipment_partner === 'Shiprocket' && selectedOrder?.label_pdf_url && (
+                  <div className="flex items-center gap-3 p-2.5 rounded-xs border bg-indigo-50 border-indigo-200">
+                    <div className="flex items-center gap-1.5 font-bold text-[11px] text-indigo-700 shrink-0">
+                      <FileText className="w-3.5 h-3.5 shrink-0" />
+                      <span>Label PDF:</span>
+                    </div>
+                    <a
+                      href={`/backend-api/orders/${selectedOrder.id}/download-label?download=1`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={`${selectedOrder.label_tracking_id || selectedOrder.order_number || 'label'} - ${selectedOrder.product_name}.pdf`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] rounded-xs transition-colors shadow-xs"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      Download Label PDF
+                    </a>
+                  </div>
+                )}
 
                 {/* RBS Online Specific Costs: Domestic (₹), International (₹) + Dump ($ -> ₹) + Label ($ -> ₹) */}
                 {shipmentForm.shipment_partner === 'RBS Online' && (() => {

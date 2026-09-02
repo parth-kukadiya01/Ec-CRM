@@ -84,7 +84,55 @@ export default function PurchasesPage() {
   const companyOptions = getAllowedCompanies(currentUser);
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
-    return companyOptions.some(c => c.toLowerCase() === comp.toLowerCase());
+    if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin' || currentUser?.role?.name === 'Super Admin') return true;
+    const target = comp.trim().toLowerCase();
+    return companyOptions.some(c => {
+      const allowed = c.trim().toLowerCase();
+      return target === allowed || target.includes(allowed) || allowed.includes(target);
+    });
+  };
+
+  const getDuePurchaseDate = (lastDeliveryDateStr?: string | null, shippingDateStr?: string | null) => {
+    const refDateStr = lastDeliveryDateStr || shippingDateStr;
+    if (!refDateStr) return null;
+    try {
+      const deliveryDate = new Date(refDateStr);
+      if (isNaN(deliveryDate.getTime())) return null;
+
+      // Purchase Due Date is strictly 5 days before Last Delivery Date
+      const dueDate = new Date(deliveryDate);
+      dueDate.setDate(dueDate.getDate() - 5);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const dueDay = new Date(dueDate);
+      dueDay.setHours(0, 0, 0, 0);
+
+      const diffTime = dueDay.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      // Do NOT show if purchase deadline is still far in the future (> 5 days before delivery)
+      if (diffDays > 0) {
+        return null;
+      }
+
+      const dayStr = String(dueDate.getDate()).padStart(2, '0');
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthStr = monthNames[dueDate.getMonth()];
+      const yearStr = dueDate.getFullYear();
+      const formatted = `${dayStr} ${monthStr} ${yearStr}`;
+
+      return {
+        dateStr: dueDate.toISOString().split('T')[0],
+        formatted,
+        daysLeft: diffDays,
+        isOverdue: diffDays < 0,
+        isToday: diffDays === 0,
+      };
+    } catch {
+      return null;
+    }
   };
 
   // Filter orders waiting for purchase action (Step 1 - Pending Purchase Entry):
@@ -231,8 +279,7 @@ export default function PurchasesPage() {
         oi: purchaseForm.delivery_code || selectedOrder.oi,
         qty: parseInt(String(purchaseForm.qty)) || selectedOrder.qty || 1,
         arriving_date: purchaseForm.estimated_shipment_date || null,
-        status: ordStatus,
-        order_status: ordStatus
+        status: ordStatus
       });
 
       setShowPurchaseModal(false);
@@ -414,6 +461,8 @@ export default function PurchasesPage() {
                     <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order #</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Company</th>
+                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>
+                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Due Purchase (5d before)</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Buyer Name</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Product Name</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>
@@ -430,6 +479,7 @@ export default function PurchasesPage() {
                         (item.product_name && ord.product_name && item.product_name.toLowerCase() === ord.product_name.toLowerCase())
                       );
                       const inStockQty = matchedInv?.stock_quantity || 0;
+                      const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
 
                       return (
                         <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
@@ -439,7 +489,32 @@ export default function PurchasesPage() {
                               {ord.company || 'ADBH'}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327]">{ord.buyer_name}</td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                            {ord.last_delivery_date || ord.shipping_date || '—'}
+                          </td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center">
+                            {dueInfo ? (
+                              <span
+                                className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${
+                                  dueInfo.isOverdue
+                                    ? 'bg-red-100 text-red-900 border-red-300'
+                                    : 'bg-amber-100 text-amber-900 border-amber-300'
+                                }`}
+                                title={`Must purchase by ${dueInfo.formatted} (5 days before ${ord.last_delivery_date || ord.shipping_date})`}
+                              >
+                                <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
+                                <span>
+                                  {dueInfo.formatted}
+                                  {dueInfo.isOverdue
+                                    ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)`
+                                    : ' (Due Today!)'}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-[#8c8f94] text-[11px]">—</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327]">{ord.buyer_name || ord.consignee_name || '—'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ord.product_name}>
                             <div className="flex items-center gap-2">
                               {ord.product_image && (
@@ -762,183 +837,225 @@ export default function PurchasesPage() {
                   )}
                   <span>
                     {purchaseForm.is_in_stock
-                      ? 'In-Stock Mode: Only Purchase Price (₹) is required. All other supplier fields are optional.'
+                      ? 'In-Stock Mode: Enter Quantity and Purchase Price (₹) to confirm in-stock fulfillment.'
                       : 'Purchase Mode: All fields marked with (*) are mandatory.'}
                   </span>
                 </div>
 
-                {/* Row 1: Quantity & SKU */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
-                        <span>Quantity (Qty) *</span>
-                      </span>
-                      <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrder?.qty || 1}</span>
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={purchaseForm.qty}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required
-                    />
-                    {purchaseForm.qty > (selectedOrder?.qty || 1) && (
-                      <div className="text-[10px] font-bold text-[#00a32a] mt-1 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-xs flex items-center gap-1">
-                        <span>✓ Excess of <b>{purchaseForm.qty - (selectedOrder?.qty || 1)} unit(s)</b> will be stored in Inventory for future orders!</span>
+                {purchaseForm.is_in_stock ? (
+                  /* IN-STOCK MODE: ONLY QUANTITY & PURCHASE PRICE */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>Quantity (Qty) *</span>
+                        </span>
+                        <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrder?.qty || 1}</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={purchaseForm.qty}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Purchase Price (INR ₹) *</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="e.g. 1500.00"
+                        value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        required
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  /* REGULAR VENDOR PURCHASE MODE: ALL FIELDS */
+                  <>
+                    {/* Row 1: Quantity & SKU */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <Layers className="w-3.5 h-3.5 text-[#2271b1]" />
+                            <span>Quantity (Qty) *</span>
+                          </span>
+                          <span className="text-[10px] text-[#50575e] font-normal">Order needs: {selectedOrder?.qty || 1}</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={purchaseForm.qty}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, qty: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                        {purchaseForm.qty > (selectedOrder?.qty || 1) && (
+                          <div className="text-[10px] font-bold text-[#00a32a] mt-1 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-xs flex items-center gap-1">
+                            <span>✓ Excess of <b>{purchaseForm.qty - (selectedOrder?.qty || 1)} unit(s)</b> will be stored in Inventory for future orders!</span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Barcode className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>SKU Number</span>
-                      <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. SKU-JEANS-001"
-                      value={purchaseForm.sku}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, sku: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Barcode className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>SKU Number</span>
+                          <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. SKU-JEANS-001"
+                          value={purchaseForm.sku}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, sku: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 2: GST / Non GST & Bank */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Receipt className="w-3.5 h-3.5 text-blue-600" />
-                      <span>GST / Non GST {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <select
-                      value={purchaseForm.gst_type}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    >
-                      <option value="GST">GST</option>
-                      <option value="Non GST">Non GST</option>
-                    </select>
-                  </div>
+                    {/* Row 2: GST / Non GST & Bank */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Receipt className="w-3.5 h-3.5 text-blue-600" />
+                          <span>GST / Non GST *</span>
+                        </label>
+                        <select
+                          value={purchaseForm.gst_type}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        >
+                          <option value="GST">GST</option>
+                          <option value="Non GST">Non GST</option>
+                        </select>
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Landmark className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Bank / Payment Mode {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder={purchaseForm.is_in_stock ? "e.g. HDFC Bank, ICICI (Optional)" : "e.g. HDFC Bank, ICICI, SBI, Bank Transfer"}
-                      value={purchaseForm.bank}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Landmark className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Bank / Payment Mode *</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. HDFC Bank, ICICI, SBI, Bank Transfer"
+                          value={purchaseForm.bank}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 3: Purchase Amount & Purchase Partner */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{purchaseForm.is_in_stock ? 'Purchase Price (INR ₹) *' : 'Purchase Amount (INR ₹) *'}</span>
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      placeholder="e.g. 1500.00"
-                      value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required
-                    />
-                  </div>
+                    {/* Row 3: Purchase Amount & Purchase Partner */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Purchase Amount (INR ₹) *</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="e.g. 1500.00"
+                          value={purchaseForm.purchase_value === 0 ? '' : purchaseForm.purchase_value}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_value: e.target.value === '' ? ('' as any) : parseFloat(e.target.value) })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <UserCheck className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>Vendor / Supplier Name {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder={purchaseForm.is_in_stock ? "e.g. In-Stock Supplier (Optional)" : "e.g. Aryastore Partner / Supplier Name"}
-                      value={purchaseForm.purchase_partner_name}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_partner_name: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <UserCheck className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>Vendor / Supplier Name *</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Aryastore Partner / Supplier Name"
+                          value={purchaseForm.purchase_partner_name}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_partner_name: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 4: Arrived Delivery Date & PO Number */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Arrived Delivery Date {purchaseForm.is_in_stock ? <span className="text-[10px] text-slate-500 font-normal">(Optional)</span> : '*'}</span>
-                    </label>
-                    <input
-                      type="date"
-                      value={purchaseForm.estimated_shipment_date}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                      required={!purchaseForm.is_in_stock}
-                    />
-                  </div>
+                    {/* Row 4: Arrived Delivery Date & PO Number */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Arrived Delivery Date *</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={purchaseForm.estimated_shipment_date}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, estimated_shipment_date: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                          required
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                      <FileText className="w-3.5 h-3.5 text-[#2271b1]" />
-                      <span>PO Number</span>
-                      <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. PO-2026-0012"
-                      value={purchaseForm.po_number}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, po_number: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                    />
-                  </div>
-                </div>
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                          <FileText className="w-3.5 h-3.5 text-[#2271b1]" />
+                          <span>PO Number</span>
+                          <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. PO-2026-0012"
+                          value={purchaseForm.po_number}
+                          onChange={(e) => setPurchaseForm({ ...purchaseForm, po_number: e.target.value })}
+                          className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                        />
+                      </div>
+                    </div>
 
-                {/* Row 5: Delivery Code (OI) */}
-                <div>
-                  <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                    <Truck className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Delivery Code / OI / Tracking</span>
-                    <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. OI-883921 / Tracking Code"
-                    value={purchaseForm.delivery_code}
-                    onChange={(e) => setPurchaseForm({ ...purchaseForm, delivery_code: e.target.value })}
-                    className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                  />
-                </div>
+                    {/* Row 5: Delivery Code (OI) */}
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Delivery Code / OI / Tracking</span>
+                        <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. OI-883921 / Tracking Code"
+                        value={purchaseForm.delivery_code}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, delivery_code: e.target.value })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
+                      />
+                    </div>
 
-                {/* Row 6: Notes / Remarks */}
-                <div>
-                  <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                    <StickyNote className="w-3.5 h-3.5 text-slate-600" />
-                    <span>Purchase Notes / Remarks</span>
-                    <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Expedited customs clearance / in-stock warehouse"
-                    value={purchaseForm.notes}
-                    onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })}
-                    className="w-full bg-white border border-[#8c8f94] p-2 outline-none focus:border-[#2271b1] rounded-xs"
-                  />
-                </div>
+                    {/* Row 6: Notes / Remarks */}
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
+                        <StickyNote className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Purchase Notes / Remarks</span>
+                        <span className="text-[10px] text-slate-500 font-normal">(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Expedited customs clearance / supplier notes"
+                        value={purchaseForm.notes}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })}
+                        className="w-full bg-white border border-[#8c8f94] p-2 outline-none focus:border-[#2271b1] rounded-xs"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Sticky Footer */}

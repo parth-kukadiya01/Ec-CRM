@@ -37,6 +37,10 @@ class OrderCreate(BaseModel):
     status: Optional[str] = None
     delivery_service: Optional[str] = None
     shipment_cost: Optional[float] = 0.0
+    label_pdf_url: Optional[str] = None
+    label_cost_usd: Optional[float] = 0.0
+    label_free: Optional[bool] = False
+    label_tracking_id: Optional[str] = None
 
 class OrderUpdate(BaseModel):
     order_process_date: Optional[date] = None
@@ -65,6 +69,10 @@ class OrderUpdate(BaseModel):
     status: Optional[str] = None
     delivery_service: Optional[str] = None
     shipment_cost: Optional[float] = None
+    label_pdf_url: Optional[str] = None
+    label_cost_usd: Optional[float] = None
+    label_free: Optional[bool] = None
+    label_tracking_id: Optional[str] = None
 
 class OrderResponse(BaseModel):
     id: int
@@ -107,6 +115,10 @@ class OrderResponse(BaseModel):
     created_at: datetime
     admin_cost_share: Optional[float] = 0.0
     total_order_cost_inr: Optional[float] = 0.0
+    label_pdf_url: Optional[str] = None
+    label_cost_usd: Optional[float] = 0.0
+    label_free: Optional[bool] = False
+    label_tracking_id: Optional[str] = None
 
     class Config:
         from_attributes = True

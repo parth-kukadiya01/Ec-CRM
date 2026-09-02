@@ -135,6 +135,13 @@ export const ordersApi = {
     });
   },
   extractUrlImage: (url: string) => api.get('/orders/extract-url-image', { params: { url } }),
+  uploadLabelPdf: (orderId: number, file: File, labelCostUsd: number, labelFree: boolean) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(`/orders/${orderId}/upload-label?label_cost_usd=${labelCostUsd}&label_free=${labelFree}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   delete: (id: number) => api.delete(`/orders/${id}`),
 };
 

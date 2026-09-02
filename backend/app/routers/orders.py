@@ -1,8 +1,9 @@
+import os
 import random
 import string
 from datetime import datetime, date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.deps import get_current_user, check_permission
@@ -248,7 +249,7 @@ def create_order(
         product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None) or (extract_product_info_from_url(order_in.product_url).get("image_url") if order_in.product_url else None),
         qty=order_in.qty,
         product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-        order_status=order_in.order_status or order_in.status,
+        order_status=order_in.order_status or "ADBH",
         purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
         arriving_date=order_in.arriving_date,
         consignee_name=order_in.consignee_name or "Consignee",
@@ -293,6 +294,225 @@ import csv
 import io
 import re
 from fastapi import UploadFile, File
+
+# ─────────────────────────────────────────────────────────────
+# Label PDF Upload Endpoint
+# ─────────────────────────────────────────────────────────────
+import uuid as uuid_module
+from app.core.s3 import is_s3_enabled, upload_file_to_s3
+
+def extract_tracking_id_from_pdf(content: bytes) -> Optional[str]:
+    """
+    Best-effort extraction of tracking/barcode number from PDF text.
+    Looks for common carrier tracking patterns.
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(content))
+        full_text = ""
+        for page in reader.pages:
+            try:
+                full_text += page.extract_text() or ""
+            except Exception:
+                pass
+
+        # Common carrier tracking patterns
+        patterns = [
+            # UPS (1Z...)
+            r'\b(1Z[A-Z0-9]{16})\b',
+            # FedEx (12–22 digits)
+            r'\b([0-9]{12,22})\b',
+            # USPS (20–22 digits)
+            r'\b([0-9]{20,22})\b',
+            # DHL (10+ digits or JD...)
+            r'\b(JD[0-9]{18})\b',
+            # Generic alphanumeric tracking
+            r'\b([A-Z]{2,4}[0-9]{8,18}[A-Z]{0,2})\b',
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, full_text)
+            if matches:
+                # Return the longest match (most likely to be a full tracking ID)
+                return max(matches, key=len)
+    except Exception:
+        pass
+    return None
+
+
+@router.post("/{order_id}/upload-label")
+async def upload_order_label(
+    order_id: int,
+    file: UploadFile = File(...),
+    label_cost_usd: float = 0.0,
+    label_free: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_permission("orders:write"))
+):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    content = await file.read()
+
+    # Upload the file (S3 or local)
+    if is_s3_enabled():
+        file_url, _, _ = upload_file_to_s3(
+            file_content=content,
+            original_filename=file.filename or "label.pdf",
+            content_type=file.content_type or "application/pdf",
+        )
+    else:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+        unique_name = f"{uuid_module.uuid4().hex[:12]}_{(file.filename or 'label.pdf').replace(' ', '_')}"
+        file_path = os.path.join(UPLOADS_DIR, unique_name)
+        with open(file_path, "wb") as buf:
+            buf.write(content)
+        file_url = f"/uploads/{unique_name}"
+
+    # Extract tracking ID from PDF (best-effort)
+    extracted_tracking_id = None
+    if file.filename and file.filename.lower().endswith(".pdf"):
+        extracted_tracking_id = extract_tracking_id_from_pdf(content)
+
+    # Update the order
+    order.label_pdf_url = file_url
+    order.label_cost_usd = label_cost_usd if not label_free else 0.0
+    order.label_free = label_free
+    if extracted_tracking_id:
+        order.label_tracking_id = extracted_tracking_id
+        # Replace the shipment_id (Forwarded ID) with the extracted tracking ID
+        order.shipment_id = extracted_tracking_id
+
+    db.commit()
+    db.refresh(order)
+    populate_order_costs(order, db)
+
+    return {
+        "success": True,
+        "label_pdf_url": file_url,
+        "tracking_id_extracted": extracted_tracking_id,
+        "order": order
+    }
+
+
+def stamp_product_name_on_pdf(pdf_bytes: bytes, product_name: str, order_num: str = "", qty: int = 1) -> bytes:
+    """Stamps product name and order info at the bottom (last) of the PDF label."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.colors import HexColor
+        import io
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=(width, height))
+
+            # Bottom banner
+            banner_height = 28
+            can.setFillColor(HexColor("#FFFFFF"))
+            can.rect(0, 0, width, banner_height, fill=1, stroke=0)
+
+            # Divider line at the top of banner
+            can.setStrokeColor(HexColor("#2271b1"))
+            can.setLineWidth(1)
+            can.line(0, banner_height, width, banner_height)
+
+            # Product details text
+            can.setFont("Helvetica-Bold", 11)
+            can.setFillColor(HexColor("#1d2327"))
+            text_str = f"Item: {product_name}"
+            if qty and qty > 1:
+                text_str += f" (Qty: {qty})"
+            if order_num:
+                text_str = f"Order #{order_num}  |  {text_str}"
+
+            can.drawString(15, 9, text_str[:120])
+            can.save()
+
+            packet.seek(0)
+            overlay_pdf = PdfReader(packet)
+            overlay_page = overlay_pdf.pages[0]
+
+            page.merge_page(overlay_page)
+            writer.add_page(page)
+
+        output = io.BytesIO()
+        writer.write(output)
+        return output.getvalue()
+    except Exception as e:
+        import logging
+        logging.getLogger("crm_api").error(f"Error stamping PDF: {e}")
+        return pdf_bytes
+
+
+@router.get("/{order_id}/download-label")
+def download_order_label(
+    order_id: int,
+    download: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Downloads or views the order label PDF with the product name stamped at the bottom.
+    Also names the file with tracking ID and product name.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.label_pdf_url:
+        raise HTTPException(status_code=404, detail="No label PDF uploaded for this order")
+
+    pdf_bytes = None
+    pdf_url = order.label_pdf_url.strip()
+
+    if pdf_url.startswith("http://") or pdf_url.startswith("https://"):
+        import urllib.request
+        req = urllib.request.Request(pdf_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as resp:
+            pdf_bytes = resp.read()
+    else:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        clean_rel = pdf_url.lstrip("/")
+        if clean_rel.startswith("uploads/"):
+            clean_rel = clean_rel[len("uploads/"):]
+        file_path = os.path.join(BASE_DIR, "uploads", clean_rel)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Label PDF file not found on disk")
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+
+    # Stamp the product name at the bottom of the PDF
+    product_name = order.product_name or "Item"
+    stamped_bytes = stamp_product_name_on_pdf(
+        pdf_bytes=pdf_bytes,
+        product_name=product_name,
+        order_num=order.order_number or "",
+        qty=order.qty or 1
+    )
+
+    import re
+    clean_product = re.sub(r'[^a-zA-Z0-9_\-\. ]', '_', product_name)[:50].strip()
+    tracking_part = order.label_tracking_id or order.shipment_id or order.order_number or f"Order-{order.id}"
+    download_filename = f"{tracking_part} - {clean_product}.pdf"
+
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=stamped_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{download_filename}"'
+        }
+    )
+
+
 
 def parse_date_flexible(val: Optional[str]) -> Optional[date]:
     if not val or not str(val).strip():
@@ -540,7 +760,7 @@ def create_bulk_orders(
             product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None),
             qty=order_in.qty or 1,
             product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-            order_status=order_in.order_status or order_in.status,
+            order_status=order_in.order_status or "ADBH",
             purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
             arriving_date=order_in.arriving_date,
             consignee_name=order_in.consignee_name or "Consignee",
