@@ -20,6 +20,7 @@ class ShipmentCreate(BaseModel):
     international_cost: Optional[float] = 0.0
     dump_cost: Optional[float] = 0.0
     label_cost_usd: Optional[float] = 0.0
+    label_free: Optional[bool] = False
     exchange_rate: Optional[float] = 99.0
     label_cost_inr: Optional[float] = 0.0
     shipment_cost: float = 0.0
@@ -39,6 +40,7 @@ class ShipmentUpdate(BaseModel):
     international_cost: Optional[float] = None
     dump_cost: Optional[float] = None
     label_cost_usd: Optional[float] = None
+    label_free: Optional[bool] = None
     exchange_rate: Optional[float] = None
     label_cost_inr: Optional[float] = None
     shipment_cost: Optional[float] = None
@@ -63,6 +65,7 @@ class ShipmentResponse(BaseModel):
     international_cost: Optional[float] = 0.0
     dump_cost: Optional[float] = 0.0
     label_cost_usd: Optional[float] = 0.0
+    label_free: Optional[bool] = False
     exchange_rate: Optional[float] = 85.0
     label_cost_inr: Optional[float] = 0.0
     shipment_cost: float

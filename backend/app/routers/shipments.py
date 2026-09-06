@@ -96,8 +96,9 @@ def create_shipment(
         dim_str = f"{ship_in.length or 0} × {ship_in.width or 0} × {ship_in.height or 0} cm"
 
     rate = ship_in.exchange_rate or 99.0
+    is_free = ship_in.label_free if ship_in.label_free is not None else (order.label_free if order else False)
     label_usd = ship_in.label_cost_usd or 0.0
-    label_inr = ship_in.label_cost_inr if ship_in.label_cost_inr is not None else round(label_usd * rate, 2)
+    label_inr = 0.0 if is_free else (ship_in.label_cost_inr if ship_in.label_cost_inr is not None else round(label_usd * rate, 2))
     dump_usd = ship_in.dump_cost or 0.0
     dump_inr = round(dump_usd * rate, 2)
 
@@ -126,6 +127,7 @@ def create_shipment(
         international_cost=ship_in.international_cost or 0.0,
         dump_cost=ship_in.dump_cost or 0.0,
         label_cost_usd=label_usd,
+        label_free=is_free,
         exchange_rate=rate,
         label_cost_inr=label_inr,
         shipment_cost=ship_cost,
@@ -137,6 +139,8 @@ def create_shipment(
     order.status = "Shipped"
     order.order_status = "Shipped"
     order.delivery_service = ship_in.shipment_partner
+    order.label_free = is_free
+    order.label_cost_usd = label_usd
     if tracking_val:
         order.shipment_id = tracking_val
     if ship_cost:
@@ -183,13 +187,17 @@ def update_shipment(
         shipment.international_cost = ship_in.international_cost
     if ship_in.dump_cost is not None:
         shipment.dump_cost = ship_in.dump_cost
+    if ship_in.label_free is not None:
+        shipment.label_free = ship_in.label_free
+        if shipment.label_free:
+            shipment.label_cost_inr = 0.0
     if ship_in.label_cost_usd is not None:
         shipment.label_cost_usd = ship_in.label_cost_usd
     if ship_in.exchange_rate is not None:
         shipment.exchange_rate = ship_in.exchange_rate
     if ship_in.label_cost_inr is not None:
-        shipment.label_cost_inr = ship_in.label_cost_inr
-    elif ship_in.label_cost_usd is not None or ship_in.exchange_rate is not None:
+        shipment.label_cost_inr = 0.0 if shipment.label_free else ship_in.label_cost_inr
+    elif not shipment.label_free and (ship_in.label_cost_usd is not None or ship_in.exchange_rate is not None):
         r = shipment.exchange_rate or 99.0
         u = shipment.label_cost_usd or 0.0
         shipment.label_cost_inr = round(u * r, 2)
@@ -197,10 +205,16 @@ def update_shipment(
         shipment.shipment_cost = ship_in.shipment_cost
     if ship_in.status is not None:
         shipment.status = ship_in.status
-        order = db.query(Order).filter(Order.id == shipment.order_id).first()
-        if order:
+
+    order = db.query(Order).filter(Order.id == shipment.order_id).first()
+    if order:
+        if ship_in.status is not None:
             order.status = ship_in.status
             order.order_status = ship_in.status
+        if ship_in.label_free is not None:
+            order.label_free = shipment.label_free
+        if ship_in.label_cost_usd is not None:
+            order.label_cost_usd = shipment.label_cost_usd
 
     db.commit()
     db.refresh(shipment)

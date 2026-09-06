@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { X, Download, FileText, ExternalLink, FileCheck, CheckCircle2, ShieldCheck, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Download, FileText, ExternalLink, FileCheck, CheckCircle2, ShieldCheck, AlertCircle, Images } from 'lucide-react';
 import { getImageUrl } from '@/lib/api';
 
 interface DocumentViewerModalProps {
@@ -10,6 +10,7 @@ interface DocumentViewerModalProps {
   document: {
     title: string;
     fileUrl: string;
+    fileUrlBack?: string;
     documentType?: string;
     documentNumber?: string;
     uploadedAt?: string;
@@ -19,11 +20,17 @@ interface DocumentViewerModalProps {
 
 export default function DocumentViewerModal({ isOpen, onClose, document }: DocumentViewerModalProps) {
   const [iframeError, setIframeError] = useState(false);
+  const [activeSide, setActiveSide] = useState<'front' | 'back'>('front');
+
+  useEffect(() => {
+    setActiveSide('front');
+    setIframeError(false);
+  }, [document?.fileUrl, document?.fileUrlBack]);
 
   if (!isOpen || !document || !document.fileUrl) return null;
 
-  // Resolve absolute URL
-  const rawUrl = document.fileUrl;
+  // Resolve active URL
+  const rawUrl = (activeSide === 'back' && document.fileUrlBack) ? document.fileUrlBack : document.fileUrl;
   const isMockUrl = rawUrl.includes('vault.crm.com') || rawUrl.includes('placeholder') || rawUrl.includes('demo');
   const fullUrl = getImageUrl(rawUrl);
 
@@ -54,16 +61,45 @@ export default function DocumentViewerModal({ isOpen, onClose, document }: Docum
 
           <div className="flex items-center gap-2">
             {!isMockUrl && (
-              <a
-                href={fullUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                download
-                className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white rounded-sm text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download</span>
-              </a>
+              <>
+                {document.fileUrlBack ? (
+                  <div className="flex items-center gap-1.5">
+                    <a
+                      href={getImageUrl(document.fileUrl)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download
+                      className="px-3 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white rounded-sm text-xs font-bold transition-all flex items-center gap-1 shadow-xs"
+                      title="Download Front Side Photo"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Front</span>
+                    </a>
+                    <a
+                      href={getImageUrl(document.fileUrlBack)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download
+                      className="px-3 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white rounded-sm text-xs font-bold transition-all flex items-center gap-1 shadow-xs"
+                      title="Download Back Side Photo"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Back</span>
+                    </a>
+                  </div>
+                ) : (
+                  <a
+                    href={fullUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download
+                    className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white rounded-sm text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download</span>
+                  </a>
+                )}
+              </>
             )}
             <button
               onClick={() => {
@@ -77,6 +113,49 @@ export default function DocumentViewerModal({ isOpen, onClose, document }: Docum
           </div>
         </div>
 
+        {/* Dual-Photo Tabs (When 2 photos exist: Front & Back) */}
+        {document.fileUrlBack && (
+          <div className="bg-[#f0f0f1] px-5 py-2 border-b border-[#c3c4c7] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-[#50575e] flex items-center gap-1">
+                <Images className="w-3.5 h-3.5 text-[#2271b1]" />
+                Select Photo:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIframeError(false);
+                  setActiveSide('front');
+                }}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeSide === 'front'
+                    ? 'bg-[#2271b1] text-white shadow-xs'
+                    : 'bg-white text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f6f7f7]'
+                }`}
+              >
+                <span>Photo 1: Front Side</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIframeError(false);
+                  setActiveSide('back');
+                }}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeSide === 'back'
+                    ? 'bg-[#2271b1] text-white shadow-xs'
+                    : 'bg-white text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f6f7f7]'
+                }`}
+              >
+                <span>Photo 2: Back Side</span>
+              </button>
+            </div>
+            <span className="text-[11px] text-[#50575e] font-semibold">
+              Currently viewing: <strong className="text-[#1d2327]">{activeSide === 'front' ? 'Photo 1 (Front Side)' : 'Photo 2 (Back Side)'}</strong>
+            </span>
+          </div>
+        )}
+
         {/* Content Viewer Body matching WP Admin Theme */}
         <div className="flex-1 bg-[#f6f7f7] p-4 overflow-auto flex items-center justify-center min-h-[420px]">
           {isImage ? (
@@ -84,7 +163,7 @@ export default function DocumentViewerModal({ isOpen, onClose, document }: Docum
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={fullUrl}
-                alt={document.title}
+                alt={`${document.title} (${activeSide === 'front' ? 'Front Side' : 'Back Side'})`}
                 className="max-h-[70vh] w-auto max-w-full object-contain rounded-sm shadow-md border border-[#c3c4c7] bg-white"
               />
             </div>
@@ -171,6 +250,11 @@ export default function DocumentViewerModal({ isOpen, onClose, document }: Docum
         <div className="px-5 py-3 bg-[#f6f7f7] border-t border-[#c3c4c7] flex items-center justify-between text-xs text-[#50575e] shrink-0">
           <div>
             <span className="font-bold text-[#1d2327]">Document Record:</span> {document.title}
+            {document.fileUrlBack && (
+              <span className="ml-2 text-[#2271b1] font-semibold">
+                ({activeSide === 'front' ? 'Viewing Photo 1: Front Side' : 'Viewing Photo 2: Back Side'})
+              </span>
+            )}
           </div>
           <button
             onClick={() => {

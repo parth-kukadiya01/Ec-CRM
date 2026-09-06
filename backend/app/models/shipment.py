@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Text, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, Text, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -25,6 +25,7 @@ class Shipment(Base):
     international_cost = Column(Float, default=0.0)
     dump_cost = Column(Float, default=0.0)
     label_cost_usd = Column(Float, default=0.0)
+    label_free = Column(Boolean, nullable=True, default=False)
     exchange_rate = Column(Float, default=99.0)
     label_cost_inr = Column(Float, default=0.0)
     shipment_cost = Column(Float, nullable=False, default=0.0)

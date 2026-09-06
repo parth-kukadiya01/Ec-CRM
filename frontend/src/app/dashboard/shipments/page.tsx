@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { shipmentsApi, ordersApi, authApi, purchasesApi, getImageUrl } from '@/lib/api';
-import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2 } from 'lucide-react';
+import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2, Download } from 'lucide-react';
 import ResizableTable from '@/components/ResizableTable';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
@@ -36,6 +36,7 @@ export default function ShipmentsPage() {
     international_cost: 0,
     dump_cost: 0,
     label_cost_usd: 0,
+    label_free: false,
     exchange_rate: 99.0,
     label_cost_inr: 0,
     shipment_cost: 0,
@@ -211,9 +212,10 @@ export default function ShipmentsPage() {
     // Pre-fill forwarding_number from label tracking ID (extracted from label PDF)
     const forwardingNum = order.label_tracking_id || '';
     // Pre-fill label cost from order's label cost
-    const labelCostUsd = order.label_free ? 0 : (order.label_cost_usd || 0);
+    const isFree = Boolean(order.label_free);
+    const labelCostUsd = isFree ? 0 : (order.label_cost_usd || 0);
     const exRate = 99.0;
-    const labelCostInr = parseFloat((labelCostUsd * exRate).toFixed(2));
+    const labelCostInr = isFree ? 0 : parseFloat((labelCostUsd * exRate).toFixed(2));
     setShipmentForm({
       order_id: order.id,
       order_number: order.order_number || `#ORD-${order.id}`,
@@ -230,6 +232,7 @@ export default function ShipmentsPage() {
       international_cost: 0,
       dump_cost: 0,
       label_cost_usd: labelCostUsd,
+      label_free: isFree,
       exchange_rate: exRate,
       label_cost_inr: labelCostInr,
       shipment_cost: 0,
@@ -245,10 +248,11 @@ export default function ShipmentsPage() {
       const dCost = parseFloat(String(shipmentForm.domestic_cost)) || 0;
       const iCost = parseFloat(String(shipmentForm.international_cost)) || 0;
       const dumpUsd = parseFloat(String(shipmentForm.dump_cost)) || 0;
-      const labelUsd = parseFloat(String(shipmentForm.label_cost_usd)) || 0;
+      const isFree = Boolean(shipmentForm.label_free);
+      const labelUsd = isFree ? 0 : (parseFloat(String(shipmentForm.label_cost_usd)) || 0);
       const exRate = parseFloat(String(shipmentForm.exchange_rate)) || 99.0;
       const dumpInr = parseFloat((dumpUsd * exRate).toFixed(2));
-      const labelInr = parseFloat((labelUsd * exRate).toFixed(2));
+      const labelInr = isFree ? 0 : parseFloat((labelUsd * exRate).toFixed(2));
 
       const sCost = shipmentForm.shipment_partner === 'RBS Online'
         ? parseFloat((dCost + iCost + dumpInr + labelInr).toFixed(2))
@@ -278,17 +282,20 @@ export default function ShipmentsPage() {
         international_cost: iCost,
         dump_cost: dumpUsd,
         label_cost_usd: labelUsd,
+        label_free: isFree,
         exchange_rate: exRate,
         label_cost_inr: labelInr,
         shipment_cost: sCost,
       });
 
-      // Automatically update order status to 'Shipped'
+      // Automatically update order status to 'Shipped' and sync label_free
       await ordersApi.update(targetOrderId, {
         status: 'Shipped',
         delivery_service: shipmentForm.shipment_partner,
         shipment_id: awbVal,
-        shipment_cost: sCost
+        shipment_cost: sCost,
+        label_free: isFree,
+        label_cost_usd: labelUsd,
       });
 
       setShowDispatchModal(false);
@@ -361,6 +368,10 @@ export default function ShipmentsPage() {
       }
     }
 
+    const matchingOrder = allOrdersList.find((o: any) => o.id === ship.order_id);
+    const isFree = Boolean(ship.label_free || matchingOrder?.label_free);
+    const labelCostUsd = isFree ? 0 : (ship.label_cost_usd || 0);
+
     setShipmentForm({
       order_id: ship.order_id,
       order_number: ship.tracking_id,
@@ -376,9 +387,10 @@ export default function ShipmentsPage() {
       domestic_cost: ship.domestic_cost || 0,
       international_cost: ship.international_cost || 0,
       dump_cost: ship.dump_cost || 0,
-      label_cost_usd: ship.label_cost_usd || 0,
+      label_cost_usd: labelCostUsd,
+      label_free: isFree,
       exchange_rate: ship.exchange_rate || 99.0,
-      label_cost_inr: ship.label_cost_inr || 0,
+      label_cost_inr: isFree ? 0 : (ship.label_cost_inr || 0),
       shipment_cost: ship.shipment_cost || 0,
     });
   };
@@ -390,10 +402,11 @@ export default function ShipmentsPage() {
       const dCost = parseFloat(String(shipmentForm.domestic_cost)) || 0;
       const iCost = parseFloat(String(shipmentForm.international_cost)) || 0;
       const dumpUsd = parseFloat(String(shipmentForm.dump_cost)) || 0;
-      const labelUsd = parseFloat(String(shipmentForm.label_cost_usd)) || 0;
+      const isFree = Boolean(shipmentForm.label_free);
+      const labelUsd = isFree ? 0 : (parseFloat(String(shipmentForm.label_cost_usd)) || 0);
       const exRate = parseFloat(String(shipmentForm.exchange_rate)) || 99.0;
       const dumpInr = parseFloat((dumpUsd * exRate).toFixed(2));
-      const labelInr = parseFloat((labelUsd * exRate).toFixed(2));
+      const labelInr = isFree ? 0 : parseFloat((labelUsd * exRate).toFixed(2));
 
       const sCost = shipmentForm.shipment_partner === 'RBS Online'
         ? parseFloat((dCost + iCost + dumpInr + labelInr).toFixed(2))
@@ -421,10 +434,20 @@ export default function ShipmentsPage() {
         international_cost: iCost,
         dump_cost: dumpUsd,
         label_cost_usd: labelUsd,
+        label_free: isFree,
         exchange_rate: exRate,
         label_cost_inr: labelInr,
         shipment_cost: sCost,
       });
+
+      if (editingShipment.order_id) {
+        await ordersApi.update(editingShipment.order_id, {
+          label_free: isFree,
+          label_cost_usd: labelUsd,
+          shipment_cost: sCost,
+        }).catch(() => { });
+      }
+
       setEditingShipment(null);
       loadAllData(false);
     } catch (err: any) {
@@ -996,11 +1019,16 @@ export default function ShipmentsPage() {
                                     Dump: ${ship.dump_cost.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.dump_cost * (ship.exchange_rate || 99.0)).toFixed(2)})</span>
                                   </span>
                                 )}
-                                {ship.label_cost_usd > 0 && (
+                                {(ship.label_free || matchingOrder?.label_free) ? (
+                                  <span className="inline-flex items-center gap-1 text-emerald-800 font-bold">
+                                    <span>Label:</span>
+                                    <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-2xs text-[9px] uppercase font-mono tracking-wider">Free Label</span>
+                                  </span>
+                                ) : ship.label_cost_usd > 0 ? (
                                   <span className="text-emerald-800 font-semibold">
                                     Label: ${ship.label_cost_usd.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.label_cost_inr || (ship.label_cost_usd * (ship.exchange_rate || 99.0))).toFixed(2)})</span>
                                   </span>
-                                )}
+                                ) : null}
                               </div>
                             ) : (
                               <span>Shipping: <b>₹{(ship.shipment_cost || 0).toFixed(2)}</b></span>
@@ -1221,22 +1249,33 @@ export default function ShipmentsPage() {
                   )}
                 </div>
 
-                {/* If Shiprocket and has label PDF, show below */}
-                {shipmentForm.shipment_partner === 'Shiprocket' && selectedOrder?.label_pdf_url && (
-                  <div className="flex items-center gap-3 p-2.5 rounded-xs border bg-indigo-50 border-indigo-200">
-                    <div className="flex items-center gap-1.5 font-bold text-[11px] text-indigo-700 shrink-0">
-                      <FileText className="w-3.5 h-3.5 shrink-0" />
-                      <span>Label PDF:</span>
+                {/* If order has label PDF, show download link and free badge */}
+                {shipmentForm.shipment_partner !== 'Shiprocket' && selectedOrder?.label_pdf_url && (
+                  <div className="flex items-center justify-between p-2.5 rounded-xs border bg-indigo-50 border-indigo-200">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 font-bold text-[11px] text-indigo-700 shrink-0">
+                        <FileText className="w-3.5 h-3.5 shrink-0" />
+                        <span>Attached Label PDF:</span>
+                      </div>
+                      {selectedOrder.label_free ? (
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px] rounded-xs uppercase tracking-wider">
+                          Free Label
+                        </span>
+                      ) : selectedOrder.label_cost_usd > 0 ? (
+                        <span className="text-[11px] font-mono font-bold text-indigo-900">
+                          (${selectedOrder.label_cost_usd.toFixed(2)})
+                        </span>
+                      ) : null}
                     </div>
                     <a
                       href={`/backend-api/orders/${selectedOrder.id}/download-label?download=1`}
                       target="_blank"
                       rel="noopener noreferrer"
                       download={`${selectedOrder.label_tracking_id || selectedOrder.order_number || 'label'} - ${selectedOrder.product_name}.pdf`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] rounded-xs transition-colors shadow-xs"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] rounded-xs transition-colors shadow-xs"
                     >
-                      <FileText className="w-3.5 h-3.5" />
-                      Download Label PDF
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Label PDF</span>
                     </a>
                   </div>
                 )}
@@ -1246,7 +1285,7 @@ export default function ShipmentsPage() {
                   const domInr = parseFloat(String(shipmentForm.domestic_cost)) || 0;
                   const intlInr = parseFloat(String(shipmentForm.international_cost)) || 0;
                   const dumpUsd = parseFloat(String(shipmentForm.dump_cost)) || 0;
-                  const labelUsd = parseFloat(String(shipmentForm.label_cost_usd)) || 0;
+                  const labelUsd = shipmentForm.label_free ? 0 : (parseFloat(String(shipmentForm.label_cost_usd)) || 0);
                   const rate = parseFloat(String(shipmentForm.exchange_rate)) || 99.0;
                   const dumpInr = dumpUsd * rate;
                   const labelInr = labelUsd * rate;
@@ -1327,21 +1366,30 @@ export default function ShipmentsPage() {
                           <div>
                             <label className="block font-bold text-[#1d2327] mb-1 text-[11px] flex items-center justify-between">
                               <span>Label Cost ($ USD)</span>
-                              <span className="text-[10px] font-bold text-emerald-800 font-mono">
-                                = ₹{labelInr.toFixed(2)} INR
-                              </span>
+                              {!shipmentForm.label_free && (
+                                <span className="text-[10px] font-bold text-emerald-800 font-mono">
+                                  = ₹{labelInr.toFixed(2)} INR
+                                </span>
+                              )}
                             </label>
-                            <div className="relative">
-                              <span className="absolute left-2.5 top-1.5 text-xs font-bold text-slate-500">$</span>
-                              <input
-                                type="number"
-                                step="any"
-                                placeholder="0.00"
-                                value={shipmentForm.label_cost_usd === 0 ? '' : shipmentForm.label_cost_usd}
-                                onChange={(e) => setShipmentForm({ ...shipmentForm, label_cost_usd: e.target.value === '' ? 0 : (e.target.value as any) })}
-                                className="w-full bg-white border border-[#8c8f94] pl-6 pr-2 py-1.5 font-bold font-mono text-emerald-900 outline-none focus:border-[#2271b1] rounded-xs"
-                              />
-                            </div>
+                            {shipmentForm.label_free ? (
+                              <div className="w-full bg-emerald-50/90 border border-emerald-300 px-3 py-1.5 font-bold font-mono text-emerald-800 text-xs rounded-xs flex items-center justify-between">
+                                <span>Free Label</span>
+                                <span className="text-[9px] font-extrabold bg-emerald-200 text-emerald-900 px-1.5 py-0.5 rounded-xs uppercase tracking-wider">Free Label</span>
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1.5 text-xs font-bold text-slate-500">$</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={shipmentForm.label_cost_usd === 0 ? '' : shipmentForm.label_cost_usd}
+                                  onChange={(e) => setShipmentForm({ ...shipmentForm, label_cost_usd: e.target.value === '' ? 0 : (e.target.value as any) })}
+                                  className="w-full bg-white border border-[#8c8f94] pl-6 pr-2 py-1.5 font-bold font-mono text-emerald-900 outline-none focus:border-[#2271b1] rounded-xs"
+                                />
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -1562,12 +1610,47 @@ export default function ShipmentsPage() {
                   )}
                 </div>
 
+                {/* If order has label PDF, show download link and free badge */}
+                {shipmentForm.shipment_partner !== 'Shiprocket' && (() => {
+                  const editOrder = allOrdersList.find((o: any) => o.id === shipmentForm.order_id);
+                  if (!editOrder?.label_pdf_url) return null;
+                  return (
+                    <div className="flex items-center justify-between p-2.5 rounded-xs border bg-indigo-50 border-indigo-200">
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 font-bold text-[11px] text-indigo-700 shrink-0">
+                          <FileText className="w-3.5 h-3.5 shrink-0" />
+                          <span>Attached Label PDF:</span>
+                        </div>
+                        {editOrder.label_free ? (
+                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px] rounded-xs uppercase tracking-wider">
+                            Free Label
+                          </span>
+                        ) : editOrder.label_cost_usd > 0 ? (
+                          <span className="text-[11px] font-mono font-bold text-indigo-900">
+                            (${editOrder.label_cost_usd.toFixed(2)})
+                          </span>
+                        ) : null}
+                      </div>
+                      <a
+                        href={`/backend-api/orders/${editOrder.id}/download-label?download=1`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={`${editOrder.label_tracking_id || editOrder.order_number || 'label'} - ${editOrder.product_name}.pdf`}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] rounded-xs transition-colors shadow-xs"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download Label PDF</span>
+                      </a>
+                    </div>
+                  );
+                })()}
+
                 {/* RBS Online Specific Costs: Domestic (₹), International (₹) + Dump ($ -> ₹) + Label ($ -> ₹) */}
                 {shipmentForm.shipment_partner === 'RBS Online' && (() => {
                   const domInr = parseFloat(String(shipmentForm.domestic_cost)) || 0;
                   const intlInr = parseFloat(String(shipmentForm.international_cost)) || 0;
                   const dumpUsd = parseFloat(String(shipmentForm.dump_cost)) || 0;
-                  const labelUsd = parseFloat(String(shipmentForm.label_cost_usd)) || 0;
+                  const labelUsd = shipmentForm.label_free ? 0 : (parseFloat(String(shipmentForm.label_cost_usd)) || 0);
                   const rate = parseFloat(String(shipmentForm.exchange_rate)) || 99.0;
                   const dumpInr = dumpUsd * rate;
                   const labelInr = labelUsd * rate;
@@ -1645,20 +1728,30 @@ export default function ShipmentsPage() {
                           <div>
                             <label className="block font-bold text-[#1d2327] mb-1 text-[11px] flex items-center justify-between">
                               <span>Label Cost ($ USD)</span>
-                              <span className="text-[10px] font-bold text-emerald-800 font-mono">
-                                = ₹{labelInr.toFixed(2)} INR
-                              </span>
+                              {!shipmentForm.label_free && (
+                                <span className="text-[10px] font-bold text-emerald-800 font-mono">
+                                  = ₹{labelInr.toFixed(2)} INR
+                                </span>
+                              )}
                             </label>
-                            <div className="relative">
-                              <span className="absolute left-2.5 top-1.5 text-xs font-bold text-slate-500">$</span>
-                              <input
-                                type="number"
-                                step="any"
-                                value={shipmentForm.label_cost_usd === 0 ? '' : shipmentForm.label_cost_usd}
-                                onChange={(e) => setShipmentForm({ ...shipmentForm, label_cost_usd: e.target.value === '' ? 0 : (e.target.value as any) })}
-                                className="w-full bg-white border border-[#8c8f94] pl-6 pr-2 py-1.5 font-bold font-mono text-emerald-900 outline-none focus:border-[#2271b1] rounded-xs"
-                              />
-                            </div>
+                            {shipmentForm.label_free ? (
+                              <div className="w-full bg-emerald-50/90 border border-emerald-300 px-3 py-1.5 font-bold font-mono text-emerald-800 text-xs rounded-xs flex items-center justify-between">
+                                <span>Free Label</span>
+                                <span className="text-[9px] font-extrabold bg-emerald-200 text-emerald-900 px-1.5 py-0.5 rounded-xs uppercase tracking-wider">Free Label</span>
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1.5 text-xs font-bold text-slate-500">$</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={shipmentForm.label_cost_usd === 0 ? '' : shipmentForm.label_cost_usd}
+                                  onChange={(e) => setShipmentForm({ ...shipmentForm, label_cost_usd: e.target.value === '' ? 0 : (e.target.value as any) })}
+                                  className="w-full bg-white border border-[#8c8f94] pl-6 pr-2 py-1.5 font-bold font-mono text-emerald-900 outline-none focus:border-[#2271b1] rounded-xs"
+                                />
+                              </div>
+                            )}
                           </div>
                         </div>
 

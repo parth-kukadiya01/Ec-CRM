@@ -41,7 +41,8 @@ import {
   Globe,
   Tag,
   Lock,
-  Landmark
+  Landmark,
+  Images
 } from 'lucide-react';
 import { hasPermission } from '@/lib/permissions';
 
@@ -75,7 +76,9 @@ interface UploadedDocItem {
   document_type: string;
   document_number?: string;
   file_url: string;
+  file_url_back?: string;
   original_name?: string;
+  original_name_back?: string;
   uploaded_at?: string;
   notes?: string;
 }
@@ -105,10 +108,12 @@ export default function AccountsPage() {
   // Document Management Modal state for specific account
   const [docModalAccount, setDocModalAccount] = useState<any>(null);
   const [uploadingDoc, setUploadingDoc] = useState(false);
-  const [docFormType, setDocFormType] = useState('GSTIN Certificate');
+  const [docFormType, setDocFormType] = useState('Aadhaar Card');
   const [docFormNumber, setDocFormNumber] = useState('');
   const [docFormNotes, setDocFormNotes] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileBack, setSelectedFileBack] = useState<File | null>(null);
+  const [twoPhotoUpload, setTwoPhotoUpload] = useState<boolean>(true);
 
   // Document Viewer Modal state
   const [previewDocument, setPreviewDocument] = useState<any>(null);
@@ -538,12 +543,44 @@ export default function AccountsPage() {
     }
   };
 
+  const handleDocTypeChange = (newType: string) => {
+    setDocFormType(newType);
+    if (newType === 'Aadhaar Card' || newType === 'Driving License') {
+      setTwoPhotoUpload(true);
+    } else {
+      setTwoPhotoUpload(false);
+    }
+  };
+
+  const getDocNumberPlaceholder = (type: string) => {
+    switch (type) {
+      case 'Aadhaar Card':
+        return 'e.g. 12-digit UIDAI Aadhaar No (1234 5678 9012)';
+      case 'Driving License':
+        return 'e.g. DL-1420110012345';
+      case 'Passport':
+        return 'e.g. Passport Number (e.g. Z1234567)';
+      case 'LLC':
+        return 'e.g. LLC Registration No / EIN / Entity ID';
+      case 'Bank Statement':
+        return 'e.g. Account Number / Statement Period';
+      case 'GSTIN Certificate':
+        return 'e.g. 24AAAAA0000A1Z5';
+      case 'PAN Card':
+        return 'e.g. ABCDE1234F';
+      default:
+        return 'e.g. Document / License / Registration #';
+    }
+  };
+
   const openDocModal = (acc: any) => {
     setDocModalAccount(acc);
-    setDocFormType('GSTIN Certificate');
+    setDocFormType('Aadhaar Card');
     setDocFormNumber('');
     setDocFormNotes('');
     setSelectedFile(null);
+    setSelectedFileBack(null);
+    setTwoPhotoUpload(true);
   };
 
   const handleFileUploadAndSave = async (e: React.FormEvent) => {
@@ -553,6 +590,7 @@ export default function AccountsPage() {
     try {
       setUploadingDoc(true);
       let uploadedFileUrl = '';
+      let uploadedFileUrlBack = '';
 
       if (selectedFile) {
         try {
@@ -568,8 +606,25 @@ export default function AccountsPage() {
         }
       }
 
+      if (twoPhotoUpload && selectedFileBack) {
+        try {
+          const uploadResBack = await uploadApi.uploadFile(selectedFileBack);
+          uploadedFileUrlBack = uploadResBack.data?.file_url || '';
+        } catch (uploadErr) {
+          console.warn('Multipart upload back photo failed, falling back to Data URL', uploadErr);
+          uploadedFileUrlBack = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(selectedFileBack);
+          });
+        }
+      }
+
       if (!uploadedFileUrl) {
-        uploadedFileUrl = `https://vault.crm.com/docs/${docFormType.toLowerCase().replace(/ /g, '_')}_${docModalAccount.id}.pdf`;
+        uploadedFileUrl = `https://vault.crm.com/docs/${docFormType.toLowerCase().replace(/ /g, '_')}_front_${docModalAccount.id}.pdf`;
+      }
+      if (twoPhotoUpload && selectedFileBack && !uploadedFileUrlBack) {
+        uploadedFileUrlBack = `https://vault.crm.com/docs/${docFormType.toLowerCase().replace(/ /g, '_')}_back_${docModalAccount.id}.pdf`;
       }
 
       let existingDocs: UploadedDocItem[] = [];
@@ -582,9 +637,11 @@ export default function AccountsPage() {
       const newDocObj: UploadedDocItem = {
         id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
         document_type: docFormType,
-        document_number: docFormNumber || docModalAccount.gst_number || '',
+        document_number: docFormNumber || (docFormType === 'GSTIN Certificate' ? docModalAccount.gst_number : '') || '',
         file_url: uploadedFileUrl,
+        file_url_back: uploadedFileUrlBack || undefined,
         original_name: selectedFile ? selectedFile.name : `${docFormType}.pdf`,
+        original_name_back: selectedFileBack ? selectedFileBack.name : undefined,
         uploaded_at: new Date().toISOString(),
         notes: docFormNotes || `Uploaded by ${currentUser?.full_name || 'Admin'}`,
       };
@@ -600,6 +657,7 @@ export default function AccountsPage() {
       });
 
       setSelectedFile(null);
+      setSelectedFileBack(null);
       setDocFormNumber('');
       setDocFormNotes('');
       fetchAccounts();
@@ -942,14 +1000,14 @@ export default function AccountsPage() {
                     <thead>
                       <tr className="bg-[#f6f7f7] text-[#2c3338] text-[11px] font-bold uppercase tracking-wider border-b border-[#c3c4c7]">
                         <th className="py-3 px-3 min-w-[110px]">Registration Date</th>
-                        <th className="py-3 px-3 min-w-[140px]">Account Name</th>
+                        <th className="py-3 px-3 min-w-[160px]">Account Name</th>
                         <th className="py-3 px-3 min-w-[140px]">Company / Partner</th>
                         <th className="py-3 px-3 min-w-[100px]">DOG Series</th>
                         <th className="py-3 px-3 min-w-[110px] text-right">Balance</th>
                         <th className="py-3 px-3 min-w-[90px] text-center">Total Order</th>
                         <th className="py-3 px-3 min-w-[110px] text-center">Total Listing</th>
                         <th className="py-3 px-3 min-w-[90px] text-center">1st Payment</th>
-                        <th className="py-3 px-3 min-w-[120px]">Brand / GTIN</th>
+                        <th className="py-3 px-3 min-w-[130px]">Brand / GTIN</th>
                         <th className="py-3 px-3 min-w-[180px]">Bank / Payoneer</th>
                         <th className="py-3 px-3 min-w-[80px] text-center">Mark</th>
                         <th className="py-3 px-3 min-w-[170px]">Mail & Credentials</th>
@@ -985,11 +1043,11 @@ export default function AccountsPage() {
                             {/* 2. Account Name */}
                             <td className="py-2.5 px-3">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-[#1d2327] text-xs hover:text-[#2271b1] transition-colors">
+                                <span className="font-bold text-[#1d2327] text-xs hover:text-[#2271b1] transition-colors leading-tight">
                                   {acc.account_name}
                                 </span>
                                 {acc.marketplace && (
-                                  <span className="px-1.5 py-0.5 rounded-xs text-[10px] font-bold bg-[#e5f5fa] text-[#006ba1] border border-[#006ba1]/30">
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-xs text-[9px] font-extrabold bg-[#e5f5fa] text-[#006ba1] border border-[#006ba1]/40 shrink-0 uppercase tracking-wide">
                                     {acc.marketplace}
                                   </span>
                                 )}
@@ -1054,12 +1112,34 @@ export default function AccountsPage() {
 
                             {/* 8. Generic / GTIN / Brand */}
                             <td className="py-2.5 px-3 text-xs">
-                              <span className={`inline-block px-2 py-0.5 rounded-xs text-[10px] font-bold border ${acc.brand_gtin === 'Generic'
-                                ? 'bg-[#f6f7f7] text-[#2c3338] border-[#c3c4c7]'
-                                : 'bg-[#2271b1]/10 text-[#2271b1] border-[#2271b1]/30'
-                                }`}>
-                                {acc.brand_gtin || 'Generic'}
-                              </span>
+                              {(() => {
+                                const raw = acc.brand_gtin || 'Generic';
+                                const items = raw
+                                  .split(/[,/]+/)
+                                  .map((s: string) => s.trim())
+                                  .filter(Boolean);
+                                if (items.length === 0) items.push('Generic');
+
+                                return (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {items.map((item: string, idx: number) => {
+                                      const isGeneric = item.toLowerCase() === 'generic';
+                                      return (
+                                        <span
+                                          key={idx}
+                                          className={`inline-flex items-center px-1.5 py-0.5 rounded-xs text-[10px] font-bold border ${
+                                            isGeneric
+                                              ? 'bg-[#f6f7f7] text-[#50575e] border-[#c3c4c7]'
+                                              : 'bg-[#2271b1]/10 text-[#2271b1] border-[#2271b1]/30'
+                                          }`}
+                                        >
+                                          {item}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
                             </td>
 
                             {/* 9. Bank & Payoneer */}
@@ -1385,9 +1465,14 @@ export default function AccountsPage() {
                     <label className="block text-xs font-bold text-[#2c3338] mb-1">Document Category *</label>
                     <select
                       value={docFormType}
-                      onChange={(e) => setDocFormType(e.target.value)}
+                      onChange={(e) => handleDocTypeChange(e.target.value)}
                       className="w-full bg-white border border-[#8c8f94] text-xs font-semibold px-3 py-1.5 rounded-sm focus:border-[#2271b1] outline-none"
                     >
+                      <option value="Aadhaar Card">Aadhaar Card (Adharcard)</option>
+                      <option value="Driving License">Driving License</option>
+                      <option value="Passport">Passport</option>
+                      <option value="LLC">LLC</option>
+                      <option value="Bank Statement">BANK STATEMENT</option>
                       <option value="GSTIN Certificate">GSTIN Certificate</option>
                       <option value="PAN Card">PAN Card</option>
                       <option value="Bank Cancelled Cheque">Bank Cancelled Cheque</option>
@@ -1406,38 +1491,108 @@ export default function AccountsPage() {
                       type="text"
                       value={docFormNumber}
                       onChange={(e) => setDocFormNumber(e.target.value)}
-                      placeholder="e.g. 24AAAAA0000A1Z5"
+                      placeholder={getDocNumberPlaceholder(docFormType)}
                       className="w-full bg-white border border-[#8c8f94] text-xs font-mono px-3 py-1.5 rounded-sm focus:border-[#2271b1] outline-none uppercase"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-[#2c3338] mb-1">Select File (PDF, PNG, JPG, DOC) *</label>
-                  <div className="relative border-2 border-dashed border-[#8c8f94] hover:border-[#2271b1] rounded-sm p-4 bg-white text-center cursor-pointer transition-all">
-                    <input
-                      type="file"
-                      required
-                      accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
-                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className="flex flex-col items-center justify-center gap-1 pointer-events-none">
-                      <UploadCloud className="w-7 h-7 text-[#2271b1] mb-0.5" />
-                      {selectedFile ? (
-                        <div className="text-xs font-bold text-[#1d2327] flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-[#00a32a]" />
-                          <span>{selectedFile.name}</span>
-                          <span className="text-[#50575e] font-mono text-[10px]">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
-                        </div>
-                      ) : (
-                        <>
-                          <span className="text-xs font-bold text-[#2c3338]">Click to choose file or drag & drop</span>
-                          <span className="text-[11px] text-[#50575e]">Supports PDF, PNG, JPG, WEBP, DOCX</span>
-                        </>
-                      )}
-                    </div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-[#2c3338]">
+                      {twoPhotoUpload ? 'Upload 2 Photos (1 માં 2 ફોટો: Front & Back Side) *' : 'Select File (PDF, PNG, JPG, DOC) *'}
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[#2271b1] cursor-pointer hover:underline">
+                      <input
+                        type="checkbox"
+                        checked={twoPhotoUpload}
+                        onChange={(e) => setTwoPhotoUpload(e.target.checked)}
+                        className="w-3.5 h-3.5 text-[#2271b1] rounded-xs cursor-pointer"
+                      />
+                      <span>2 Photo Upload (Front & Back)</span>
+                    </label>
                   </div>
+
+                  {twoPhotoUpload ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Photo 1: Front Side */}
+                      <div className="relative border-2 border-dashed border-[#8c8f94] hover:border-[#2271b1] rounded-sm p-3 bg-white text-center transition-all">
+                        <input
+                          type="file"
+                          required
+                          accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
+                          onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                        />
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <div className="w-7 h-7 rounded-full bg-[#2271b1]/10 text-[#2271b1] flex items-center justify-center font-bold text-xs">
+                            1
+                          </div>
+                          <span className="text-xs font-bold text-[#1d2327]">Photo 1: Front Side *</span>
+                          {selectedFile ? (
+                            <div className="text-xs font-bold text-[#00a32a] flex items-center gap-1.5 bg-[#f6f7f7] px-2 py-1 rounded-xs border border-[#c3c4c7] mt-0.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate max-w-[130px]">{selectedFile.name}</span>
+                              <span className="text-[10px] text-[#50575e] font-mono shrink-0">({(selectedFile.size / 1024).toFixed(0)} KB)</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-[#50575e]">Click to upload Front Side photo</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Photo 2: Back Side */}
+                      <div className="relative border-2 border-dashed border-[#8c8f94] hover:border-[#2271b1] rounded-sm p-3 bg-white text-center transition-all">
+                        <input
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
+                          onChange={(e) => setSelectedFileBack(e.target.files?.[0] || null)}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                        />
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <div className="w-7 h-7 rounded-full bg-[#dba617]/10 text-[#dba617] flex items-center justify-center font-bold text-xs">
+                            2
+                          </div>
+                          <span className="text-xs font-bold text-[#1d2327]">Photo 2: Back Side</span>
+                          {selectedFileBack ? (
+                            <div className="text-xs font-bold text-[#00a32a] flex items-center gap-1.5 bg-[#f6f7f7] px-2 py-1 rounded-xs border border-[#c3c4c7] mt-0.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate max-w-[130px]">{selectedFileBack.name}</span>
+                              <span className="text-[10px] text-[#50575e] font-mono shrink-0">({(selectedFileBack.size / 1024).toFixed(0)} KB)</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-[#50575e]">Click to upload Back Side photo</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Single File Upload */
+                    <div className="relative border-2 border-dashed border-[#8c8f94] hover:border-[#2271b1] rounded-sm p-4 bg-white text-center cursor-pointer transition-all">
+                      <input
+                        type="file"
+                        required
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
+                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <div className="flex flex-col items-center justify-center gap-1 pointer-events-none">
+                        <UploadCloud className="w-7 h-7 text-[#2271b1] mb-0.5" />
+                        {selectedFile ? (
+                          <div className="text-xs font-bold text-[#1d2327] flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-[#00a32a]" />
+                            <span>{selectedFile.name}</span>
+                            <span className="text-[#50575e] font-mono text-[10px]">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs font-bold text-[#2c3338]">Click to choose file or drag & drop</span>
+                            <span className="text-[11px] text-[#50575e]">Supports PDF, PNG, JPG, WEBP, DOCX</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1519,6 +1674,12 @@ export default function AccountsPage() {
                             <div className="min-w-0">
                               <div className="font-bold text-[#1d2327] text-xs truncate flex items-center gap-2">
                                 <span>{d.document_type}</span>
+                                {d.file_url_back && (
+                                  <span className="font-semibold text-[10px] text-[#2271b1] bg-[#2271b1]/10 px-1.5 py-0.5 border border-[#2271b1]/20 rounded-xs flex items-center gap-1">
+                                    <Images className="w-3 h-3" />
+                                    2 Photos (Front & Back)
+                                  </span>
+                                )}
                                 {d.document_number && (
                                   <span className="font-mono text-[10px] text-[#50575e] bg-[#f6f7f7] px-1.5 py-0.5 border border-[#c3c4c7] rounded-xs">
                                     {d.document_number}
@@ -1527,6 +1688,9 @@ export default function AccountsPage() {
                               </div>
                               <div className="text-[11px] text-[#50575e] truncate mt-0.5 flex items-center gap-3">
                                 <span>{d.original_name || 'Attached file'}</span>
+                                {d.original_name_back && (
+                                  <span className="text-[#2271b1] font-medium">+ Back: {d.original_name_back}</span>
+                                )}
                                 {d.uploaded_at && (
                                   <span className="font-mono text-[#787c82] text-[10px]">
                                     {new Date(d.uploaded_at).toLocaleDateString()}
@@ -1542,6 +1706,7 @@ export default function AccountsPage() {
                               onClick={() => setPreviewDocument({
                                 title: `${docModalAccount.account_name} - ${d.document_type}`,
                                 fileUrl: d.file_url,
+                                fileUrlBack: d.file_url_back,
                                 documentType: d.document_type,
                                 documentNumber: d.document_number,
                                 uploadedAt: d.uploaded_at,
@@ -1554,16 +1719,44 @@ export default function AccountsPage() {
                               <span>View Doc</span>
                             </button>
 
-                            <a
-                              href={getImageUrl(d.file_url)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download
-                              className="p-1 text-[#50575e] hover:text-[#1d2327] hover:bg-[#f0f0f1] rounded-sm transition-all"
-                              title="Download File"
-                            >
-                              <Download className="w-4 h-4" />
-                            </a>
+                            {d.file_url_back ? (
+                              <div className="flex items-center gap-0.5 bg-[#f6f7f7] border border-[#c3c4c7] rounded-sm p-0.5">
+                                <a
+                                  href={getImageUrl(d.file_url)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download
+                                  className="px-1.5 py-0.5 text-[10px] font-bold text-[#2271b1] hover:bg-white rounded-xs transition-all flex items-center gap-0.5"
+                                  title="Download Front Photo"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Front
+                                </a>
+                                <span className="text-[#c3c4c7]">|</span>
+                                <a
+                                  href={getImageUrl(d.file_url_back)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download
+                                  className="px-1.5 py-0.5 text-[10px] font-bold text-[#2271b1] hover:bg-white rounded-xs transition-all flex items-center gap-0.5"
+                                  title="Download Back Photo"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Back
+                                </a>
+                              </div>
+                            ) : (
+                              <a
+                                href={getImageUrl(d.file_url)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download
+                                className="p-1 text-[#50575e] hover:text-[#1d2327] hover:bg-[#f0f0f1] rounded-sm transition-all"
+                                title="Download File"
+                              >
+                                <Download className="w-4 h-4" />
+                              </a>
+                            )}
 
                             {canEdit && (
                               <button
@@ -1803,8 +1996,9 @@ export default function AccountsPage() {
                       value={formData.brand_gtin}
                       onChange={(e) => setFormData({ ...formData, brand_gtin: e.target.value })}
                       className="w-full bg-white border border-[#8c8f94] text-xs font-semibold px-3 py-1.5 rounded-sm focus:border-[#2271b1] outline-none"
-                      placeholder="e.g. Generic / Wemsu / Vimantara"
+                      placeholder="e.g. Generic, SpiceRoot, Wemsu (comma-separated for multiple)"
                     />
+                    <p className="text-[10px] text-[#50575e] mt-0.5 font-normal">Use commas or slashes to list multiple brands (e.g. <span className="font-mono text-[#2271b1]">SpiceRoot, Generic</span>)</p>
                   </div>
 
                   <div className="sm:col-span-2">

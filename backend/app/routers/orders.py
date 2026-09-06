@@ -379,7 +379,7 @@ async def upload_order_label(
 
     # Update the order
     order.label_pdf_url = file_url
-    order.label_cost_usd = label_cost_usd if not label_free else 0.0
+    order.label_cost_usd = label_cost_usd
     order.label_free = label_free
     if extracted_tracking_id:
         order.label_tracking_id = extracted_tracking_id

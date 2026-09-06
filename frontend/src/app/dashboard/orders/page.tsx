@@ -388,8 +388,8 @@ export default function OrdersPage() {
       const allowed = c.trim().toLowerCase();
       return target === allowed || target.includes(allowed) || allowed.includes(target);
     }) ||
-    companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
-    partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
+      companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
+      partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
   };
 
   const companyItems = Array.from(new Set([
@@ -960,7 +960,7 @@ export default function OrdersPage() {
       const res = await ordersApi.uploadLabelPdf(
         selectedOrderForLabel.id,
         file,
-        labelFreeInput ? 0 : labelCostInput,
+        labelCostInput,
         labelFreeInput
       );
       const data = res.data;
@@ -969,7 +969,7 @@ export default function OrdersPage() {
       setOrders(prev => prev.map(o => o.id === selectedOrderForLabel.id ? {
         ...o,
         label_pdf_url: data.label_pdf_url,
-        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_cost_usd: labelCostInput,
         label_free: labelFreeInput,
         label_tracking_id: data.tracking_id_extracted || o.label_tracking_id,
         shipment_id: data.tracking_id_extracted || o.shipment_id,
@@ -989,12 +989,12 @@ export default function OrdersPage() {
     if (!selectedOrderForLabel) return;
     try {
       await ordersApi.update(selectedOrderForLabel.id, {
-        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_cost_usd: labelCostInput,
         label_free: labelFreeInput,
       });
       setOrders(prev => prev.map(o => o.id === selectedOrderForLabel.id ? {
         ...o,
-        label_cost_usd: labelFreeInput ? 0 : labelCostInput,
+        label_cost_usd: labelCostInput,
         label_free: labelFreeInput,
       } : o));
       setShowLabelModal(false);
@@ -1109,8 +1109,8 @@ export default function OrdersPage() {
               className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedStatus === 'Due Purchase'
                 ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
                 : duePurchaseCount > 0
-                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
-                : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                  ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                  : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
                 }`}
               title="Orders where purchase is due (within 5 days before delivery or overdue)"
             >
@@ -1427,12 +1427,12 @@ export default function OrdersPage() {
                             const cur = (ord.order_status || 'ADBH').trim();
                             const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
                             const s = matchedStatus.toLowerCase();
-                            const colorClass = 
+                            const colorClass =
                               (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
-                              s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
-                              s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
-                              s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
-                              'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
+                                s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
+                                  s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
+                                    s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
+                                      'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
 
                             return (
                               <select
@@ -1540,11 +1540,10 @@ export default function OrdersPage() {
                                 </div>
                                 {dueInfo && (
                                   <span
-                                    className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${
-                                      dueInfo.isOverdue
+                                    className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue
                                         ? 'bg-red-100 text-red-900 border-red-300'
                                         : 'bg-amber-100 text-amber-900 border-amber-300'
-                                    }`}
+                                      }`}
                                     title={`Purchase Due Date: ${dueInfo.formatted} (5 days before delivery: ${ord.last_delivery_date || ord.shipping_date})`}
                                   >
                                     <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
@@ -2687,11 +2686,10 @@ export default function OrdersPage() {
 
               {/* Error / Info */}
               {labelUploadError && (
-                <div className={`p-2.5 rounded-sm border text-[11px] flex items-start gap-2 ${
-                  labelUploadError.startsWith('Label saved') 
-                    ? 'bg-amber-50 border-amber-300 text-amber-900' 
+                <div className={`p-2.5 rounded-sm border text-[11px] flex items-start gap-2 ${labelUploadError.startsWith('Label saved')
+                    ? 'bg-amber-50 border-amber-300 text-amber-900'
                     : 'bg-red-50 border-red-300 text-red-900'
-                }`}>
+                  }`}>
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>{labelUploadError}</span>
                 </div>
@@ -2707,12 +2705,12 @@ export default function OrdersPage() {
                     type="number"
                     step="0.01"
                     min="0"
-                    value={labelFreeInput ? '' : labelCostInput}
-                    disabled={labelFreeInput}
-                    onChange={(e) => setLabelCostInput(parseFloat(e.target.value) || 0)}
-                    placeholder={labelFreeInput ? 'Free' : '0.00'}
-                    className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs outline-none focus:border-[#2271b1] disabled:bg-[#f0f0f1] disabled:text-[#a7aaad]"
+                    value={labelCostInput === 0 ? '' : labelCostInput}
+                    onChange={(e) => setLabelCostInput(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    placeholder="0.00"
+                    className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs outline-none focus:border-[#2271b1]"
                   />
+
                 </div>
                 <div className="flex flex-col justify-end pb-0.5">
                   <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-1">
