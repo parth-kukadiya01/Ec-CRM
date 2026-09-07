@@ -265,7 +265,7 @@ export default function ShipmentsPage() {
       const dimStr = `${len} × ${wid} × ${hgt} cm`;
       const awbVal = shipmentForm.awb_number || shipmentForm.tracking_id || `AWB-${targetOrderId}`;
 
-      await shipmentsApi.create({
+      const shipPayload = {
         order_id: targetOrderId,
         shipment_partner: shipmentForm.shipment_partner,
         tracking_id: awbVal,
@@ -286,7 +286,9 @@ export default function ShipmentsPage() {
         exchange_rate: exRate,
         label_cost_inr: labelInr,
         shipment_cost: sCost,
-      });
+      };
+
+      const res = await shipmentsApi.create(shipPayload);
 
       // Automatically update order status to 'Shipped' and sync label_free
       await ordersApi.update(targetOrderId, {
@@ -298,9 +300,22 @@ export default function ShipmentsPage() {
         label_cost_usd: labelUsd,
       });
 
+      // Optimistic update: add new shipment to list
+      const newShipment = res.data || { ...shipPayload, id: Date.now(), status: 'Shipped', created_at: new Date().toISOString() };
+      setShipments(prev => [...prev, newShipment]);
+
+      // Remove from ready orders since it's now shipped
+      setReadyOrders(prev => prev.filter(o => o.id !== targetOrderId));
+
+      // Update the order in allOrdersList
+      setAllOrdersList(prev => prev.map(o =>
+        o.id === targetOrderId
+          ? { ...o, status: 'Shipped', delivery_service: shipmentForm.shipment_partner, shipment_id: awbVal, shipment_cost: sCost, label_free: isFree, label_cost_usd: labelUsd }
+          : o
+      ));
+
       setShowDispatchModal(false);
       setActiveTab('dispatched');
-      loadAllData(false);
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error creating shipment';
@@ -314,8 +329,12 @@ export default function ShipmentsPage() {
       const matchingPur = purchases.find((p: any) => p.order_id === orderId);
       if (matchingPur && (newStatus === 'Ready to Ship' || newStatus === 'Ready for Shipment' || newStatus === 'In Stock')) {
         await purchasesApi.update(matchingPur.id, { status: 'Received' });
+        setPurchases(prev => prev.map(p => p.id === matchingPur.id ? { ...p, status: 'Received' } : p));
       }
-      loadAllData(false);
+
+      // Optimistic update: update status in local state
+      setReadyOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+      setAllOrdersList(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
     } catch (err) {
       console.error(err);
       alert('Error updating order status');
@@ -342,12 +361,10 @@ export default function ShipmentsPage() {
         await purchasesApi.update(pur.id, { status: 'Received' });
       }
       await ordersApi.update(ord.id, { status: 'Ready to Ship' });
-
-      // 3. Silent background refresh (showSpinner = false)
-      await loadAllData(false);
     } catch (err) {
       console.error(err);
       alert('Error marking purchase as received');
+      // On error, reload to restore correct state
       loadAllData(false);
     } finally {
       setReceivingOrderId(null);
@@ -419,7 +436,7 @@ export default function ShipmentsPage() {
       const dimStr = `${len} × ${wid} × ${hgt} cm`;
       const awbVal = shipmentForm.awb_number || shipmentForm.tracking_id;
 
-      await shipmentsApi.update(editingShipment.id, {
+      const updatePayload = {
         shipment_partner: shipmentForm.shipment_partner,
         tracking_id: awbVal,
         awb_number: awbVal,
@@ -438,7 +455,9 @@ export default function ShipmentsPage() {
         exchange_rate: exRate,
         label_cost_inr: labelInr,
         shipment_cost: sCost,
-      });
+      };
+
+      await shipmentsApi.update(editingShipment.id, updatePayload);
 
       if (editingShipment.order_id) {
         await ordersApi.update(editingShipment.order_id, {
@@ -446,10 +465,21 @@ export default function ShipmentsPage() {
           label_cost_usd: labelUsd,
           shipment_cost: sCost,
         }).catch(() => { });
+
+        // Optimistic update: sync order in allOrdersList
+        setAllOrdersList(prev => prev.map(o =>
+          o.id === editingShipment.order_id
+            ? { ...o, label_free: isFree, label_cost_usd: labelUsd, shipment_cost: sCost }
+            : o
+        ));
       }
 
+      // Optimistic update: update shipment in local state
+      setShipments(prev => prev.map(s =>
+        s.id === editingShipment.id ? { ...s, ...updatePayload } : s
+      ));
+
       setEditingShipment(null);
-      loadAllData(false);
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error updating shipment details';
@@ -462,10 +492,14 @@ export default function ShipmentsPage() {
       if (typeof id === 'string' && id.startsWith('ord-')) {
         const orderId = parseInt(id.replace('ord-', ''));
         await ordersApi.update(orderId, { status: newStatus });
+        // Optimistic update: update the auto-generated shipment entry
+        setShipments(prev => prev.map(s => s.id === id ? { ...s, status: newStatus } : s));
+        setAllOrdersList(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
       } else {
         await shipmentsApi.update(Number(id), { status: newStatus });
+        // Optimistic update: update shipment status locally
+        setShipments(prev => prev.map(s => s.id === Number(id) ? { ...s, status: newStatus } : s));
       }
-      loadAllData(false);
     } catch (err) {
       console.error(err);
       alert('Error updating shipment status');
@@ -478,10 +512,27 @@ export default function ShipmentsPage() {
         if (typeof id === 'string' && id.startsWith('ord-')) {
           const orderId = parseInt(id.replace('ord-', ''));
           await ordersApi.update(orderId, { status: 'Ready to Ship' });
+          // Optimistic update: remove from shipments, move back to ready
+          setShipments(prev => prev.filter(s => s.id !== id));
+          setAllOrdersList(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Ready to Ship' } : o));
+          const orderToRestore = allOrdersList.find(o => o.id === orderId);
+          if (orderToRestore) {
+            setReadyOrders(prev => [...prev, { ...orderToRestore, status: 'Ready to Ship' }]);
+          }
         } else {
+          const deletedShipment = shipments.find(s => s.id === Number(id));
           await shipmentsApi.delete(Number(id));
+          // Optimistic update: remove from shipments list
+          setShipments(prev => prev.filter(s => s.id !== Number(id)));
+          // If the order should go back to ready state
+          if (deletedShipment?.order_id) {
+            const orderToRestore = allOrdersList.find(o => o.id === deletedShipment.order_id);
+            if (orderToRestore) {
+              setReadyOrders(prev => [...prev, { ...orderToRestore, status: 'Ready to Ship' }]);
+              setAllOrdersList(prev => prev.map(o => o.id === deletedShipment.order_id ? { ...o, status: 'Ready to Ship' } : o));
+            }
+          }
         }
-        loadAllData(false);
       } catch (err) {
         console.error(err);
         alert('Error deleting shipment');

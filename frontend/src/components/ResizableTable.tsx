@@ -23,32 +23,26 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
     // Remove any existing resizers
     table.querySelectorAll('.col-resizer').forEach((el) => el.remove());
 
-    // Capture NATURAL widths before switching to fixed layout
-    const naturalWidths: number[] = [];
+    // Keep table-layout: auto so columns size naturally based on content.
+    // Only switch to fixed when user manually drags a resizer.
+    table.style.tableLayout = 'auto';
+
+    // Ensure all th cells have proper styling to prevent overlap
     ths.forEach((th) => {
-      naturalWidths.push(Math.max(80, th.getBoundingClientRect().width));
-    });
-
-    // Now apply fixed layout with captured natural widths
-    table.style.tableLayout = 'fixed';
-
-    ths.forEach((th, i) => {
       const isSticky = th.classList.contains('sticky');
-      th.style.width = `${naturalWidths[i]}px`;
-      th.style.minWidth = isSticky ? '70px' : '60px';
       if (!isSticky) {
         th.style.position = 'relative';
-        th.style.overflow = 'hidden';
       }
+      th.style.whiteSpace = 'nowrap';
+      th.style.overflow = 'hidden';
       th.style.textOverflow = 'ellipsis';
     });
 
-    // Apply overflow hidden to non-sticky td cells
+    // Ensure all td cells have proper styling to prevent overlap
     table.querySelectorAll('td').forEach((td) => {
-      if (!td.classList.contains('sticky')) {
-        td.style.overflow = 'hidden';
-      }
+      td.style.overflow = 'hidden';
       td.style.textOverflow = 'ellipsis';
+      td.style.whiteSpace = 'nowrap';
     });
 
     // Add resizer handles to all but the last th
@@ -65,6 +59,21 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
       const onMouseDown = (e: MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+
+        // Switch to fixed layout on first resize so widths become explicit
+        if (table.style.tableLayout !== 'fixed') {
+          const allThs = headerRow.querySelectorAll('th');
+          const currentWidths: number[] = [];
+          allThs.forEach((t) => {
+            currentWidths.push(Math.max(80, t.getBoundingClientRect().width));
+          });
+          table.style.tableLayout = 'fixed';
+          allThs.forEach((t, idx) => {
+            t.style.width = `${currentWidths[idx]}px`;
+            t.style.minWidth = t.classList.contains('sticky') ? '70px' : '60px';
+          });
+        }
+
         const startX = e.clientX;
         const startWidth = th.getBoundingClientRect().width;
         const nextStartWidth = nextTh ? nextTh.getBoundingClientRect().width : 100;
@@ -75,10 +84,10 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
 
         const onMouseMove = (ev: MouseEvent) => {
           const diff = ev.clientX - startX;
-          const newWidth = Math.max(50, startWidth + diff);
+          const newWidth = Math.max(60, startWidth + diff);
           th.style.width = `${newWidth}px`;
           if (nextTh && !nextTh.classList.contains('sticky')) {
-            const nextNewWidth = Math.max(50, nextStartWidth - diff);
+            const nextNewWidth = Math.max(60, nextStartWidth - diff);
             nextTh.style.width = `${nextNewWidth}px`;
           }
         };
@@ -114,3 +123,4 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
     </div>
   );
 }
+
