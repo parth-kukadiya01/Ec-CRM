@@ -47,6 +47,25 @@ async def lifespan(app: FastAPI):
     
     # Ensure database schema is ready
     Base.metadata.create_all(bind=engine)
+    
+    # Auto-migrate any missing columns from SQLAlchemy models to existing tables
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        db_tables = inspector.get_table_names()
+        with engine.connect() as conn:
+            for table_name, table in Base.metadata.tables.items():
+                if table_name in db_tables:
+                    existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+                    for col in table.columns:
+                        if col.name not in existing_cols:
+                            col_type = col.type.compile(engine.dialect)
+                            logger.info(f"Auto-migrating: Adding missing column {col.name} ({col_type}) to table {table_name}")
+                            conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}'))
+                            conn.commit()
+    except Exception as e:
+        logger.error(f"Error during auto-column migration: {e}")
+
     db = SessionLocal()
     try:
         if db.query(User).count() == 0:

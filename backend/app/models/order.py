@@ -58,6 +58,6 @@ class Order(Base):
 
     product = relationship("Inventory")
     account = relationship("Account")
-    purchases = relationship("Purchase", back_populates="order")
-    shipments = relationship("Shipment", back_populates="order")
+    purchases = relationship("Purchase", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
+    shipments = relationship("Shipment", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
 

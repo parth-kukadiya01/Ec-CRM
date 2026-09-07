@@ -797,8 +797,10 @@ export default function OrdersPage() {
     try {
       setOrders(prev => prev.filter(o => o.id !== orderId));
       await ordersApi.delete(orderId);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete order', err);
+      const msg = err.response?.data?.detail || 'Failed to delete order.';
+      alert(msg);
       loadData();
     }
   };
@@ -904,7 +906,7 @@ export default function OrdersPage() {
     try {
       const payload = {
         ...orderForm,
-        status: editingOrder.status || 'Pending',
+        status: orderForm.status || editingOrder.status || 'Pending',
         order_status: orderForm.order_status || 'ADBH',
         price_usd: parseFloat(orderForm.price_usd as any) || 0,
         qty: parseInt(orderForm.qty as any) || 1,

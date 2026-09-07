@@ -43,6 +43,7 @@ class OrderCreate(BaseModel):
     label_tracking_id: Optional[str] = None
 
 class OrderUpdate(BaseModel):
+    order_number: Optional[str] = None
     order_process_date: Optional[date] = None
     last_delivery_date: Optional[date] = None
     shipping_date: Optional[date] = None
