@@ -462,7 +462,7 @@ export default function DashboardOverview() {
                           <span className={`px-2 py-0.5 font-bold text-[10px] uppercase rounded-xs border ${ord.status === 'Delivered' ? 'bg-purple-100 text-purple-900 border-purple-300'
                             : ord.status === 'Shipped' ? 'bg-blue-100 text-blue-900 border-blue-300'
                               : ord.status === 'Purchased' ? 'bg-amber-100 text-amber-900 border-amber-300'
-                                : ord.status === 'Ready to Ship' || ord.status === 'Ready for Shipment' ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                : ord.status === 'Ready to Ship' ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
                                   : 'bg-[#f0f0f1] text-[#1d2327] border-[#c3c4c7]'
                             }`}>
                             {ord.status || 'ADBH'}

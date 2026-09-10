@@ -16,6 +16,7 @@ class OrderCreate(BaseModel):
     product_name: str
     product_url: Optional[str] = None
     product_image: Optional[str] = None
+    product_items: Optional[str] = None
     qty: int = 1
     price_usd: float = 0.0
     order_status: Optional[str] = "ADBH"
@@ -53,6 +54,7 @@ class OrderUpdate(BaseModel):
     product_name: Optional[str] = None
     product_url: Optional[str] = None
     product_image: Optional[str] = None
+    product_items: Optional[str] = None
     qty: Optional[int] = None
     price_usd: Optional[float] = None
     order_status: Optional[str] = None
@@ -90,6 +92,7 @@ class OrderResponse(BaseModel):
     product_name: str
     product_url: Optional[str] = None
     product_image: Optional[str] = None
+    product_items: Optional[str] = None
     qty: int = 1
     price_usd: float = 0.0
     order_status: Optional[str] = "ADBH"

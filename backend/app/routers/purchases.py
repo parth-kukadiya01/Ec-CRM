@@ -116,13 +116,20 @@ def create_purchase(
         inv = db.query(Inventory).filter(Inventory.sku == pur_in.sku).first()
     if not inv and (pur_in.product_name or order.product_name):
         p_name = (pur_in.product_name or order.product_name).strip()
-        inv = db.query(Inventory).filter(Inventory.product_name.ilike(p_name)).first()
+        from sqlalchemy import func
+        inv = db.query(Inventory).filter(
+            func.lower(func.trim(Inventory.product_name)) == p_name.lower()
+        ).first()
 
     if inv:
         if pur_in.sku and not inv.sku:
             inv.sku = pur_in.sku
         if excess_qty > 0:
             inv.stock_quantity = (inv.stock_quantity or 0) + excess_qty
+        if order.product_url and not inv.product_url:
+            inv.product_url = order.product_url
+        if order.product_image and not inv.image_url:
+            inv.image_url = order.product_image
         order.product_id = inv.id
     else:
         import random
@@ -135,7 +142,9 @@ def create_purchase(
             stock_quantity=excess_qty,
             price=order.price_usd or pur_in.purchase_value or 0.0,
             partner_name=pur_in.purchase_partner_name or order.seller_account or "General",
-            category="General"
+            category="General",
+            product_url=order.product_url or None,
+            image_url=order.product_image or None
         )
         db.add(inv)
         db.flush()
@@ -207,15 +216,24 @@ def update_purchase(
                 if order.product_id:
                     inv = db.query(Inventory).filter(Inventory.id == order.product_id).first()
                 else:
-                    inv = db.query(Inventory).filter(Inventory.product_name.ilike(order.product_name)).first()
+                    from sqlalchemy import func
+                    inv = db.query(Inventory).filter(
+                        func.lower(func.trim(Inventory.product_name)) == order.product_name.strip().lower()
+                    ).first()
 
                 if inv:
-                    inv.stock_quantity += purchase.qty
+                    inv.stock_quantity = (inv.stock_quantity or 0) + purchase.qty
+                    if order.product_url and not inv.product_url:
+                        inv.product_url = order.product_url
+                    if order.product_image and not inv.image_url:
+                        inv.image_url = order.product_image
                 else:
                     inv = Inventory(
                         product_name=order.product_name,
-                        price=order.product_price,
-                        stock_quantity=purchase.qty
+                        price=order.product_price or 0.0,
+                        stock_quantity=purchase.qty,
+                        product_url=order.product_url or None,
+                        image_url=order.product_image or None
                     )
                     db.add(inv)
                     db.flush()

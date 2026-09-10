@@ -234,10 +234,6 @@ export default function PurchasesPage() {
         alert('Please enter the Vendor / Supplier Name');
         return;
       }
-      if (!purchaseForm.bank?.trim()) {
-        alert('Please enter the Bank / Payment Mode');
-        return;
-      }
       if (!purchaseForm.estimated_shipment_date) {
         alert('Please enter the Arrived Delivery Date');
         return;
@@ -923,39 +919,7 @@ export default function PurchasesPage() {
                       </div>
                     </div>
 
-                    {/* Row 2: GST / Non GST & Bank */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                          <Receipt className="w-3.5 h-3.5 text-blue-600" />
-                          <span>GST / Non GST *</span>
-                        </label>
-                        <select
-                          value={purchaseForm.gst_type}
-                          onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
-                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                          required
-                        >
-                          <option value="GST">GST</option>
-                          <option value="Non GST">Non GST</option>
-                        </select>
-                      </div>
 
-                      <div>
-                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                          <Landmark className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Bank / Payment Mode *</span>
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. HDFC Bank, ICICI, SBI, Bank Transfer"
-                          value={purchaseForm.bank}
-                          onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
-                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                          required
-                        />
-                      </div>
-                    </div>
 
                     {/* Row 3: Purchase Amount & Purchase Partner */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

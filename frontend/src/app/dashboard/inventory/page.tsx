@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 import React, { useEffect, useState } from 'react';
 import { inventoryApi, authApi, usersApi } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
-import { Package, Plus, Search, Edit2, Trash2, AlertCircle, ShieldAlert, Store, CheckCircle2, Filter, Upload, Image as ImageIcon, Link as LinkIcon, Paperclip } from 'lucide-react';
+import { Package, Plus, Search, Edit2, Trash2, AlertCircle, ShieldAlert, Store, CheckCircle2, Filter, Upload, Image as ImageIcon, Link as LinkIcon, Paperclip, ExternalLink } from 'lucide-react';
 import { hasPermission } from '@/lib/permissions';
 
 export default function InventoryPage() {
@@ -27,6 +27,7 @@ export default function InventoryPage() {
     other_details: '',
     partner_id: '',
     image_url: '',
+    product_url: '',
   });
 
   const fetchInventory = async () => {
@@ -85,6 +86,7 @@ export default function InventoryPage() {
       other_details: '',
       partner_id: '',
       image_url: '',
+      product_url: '',
     });
     setShowModal(true);
   };
@@ -100,6 +102,7 @@ export default function InventoryPage() {
       other_details: item.other_details || '',
       partner_id: item.partner_id ? String(item.partner_id) : '',
       image_url: item.image_url || '',
+      product_url: item.product_url || '',
     });
     setShowModal(true);
   };
@@ -141,6 +144,7 @@ export default function InventoryPage() {
         other_details: formData.other_details || null,
         partner_id: formData.partner_id ? parseInt(formData.partner_id) : 0,
         image_url: formData.image_url || null,
+        product_url: formData.product_url ? formData.product_url.trim() : null,
       };
 
       if (editItem) {
@@ -293,7 +297,20 @@ export default function InventoryPage() {
                       )}
                     </td>
                     <td className="py-3.5 px-4">
-                      <div className="font-extrabold text-slate-900 text-sm">{item.product_name}</div>
+                      <div className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
+                        <span>{item.product_name}</span>
+                        {item.product_url && (
+                          <a
+                            href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 p-0.5"
+                            title="Open Product Web URL"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 inline" />
+                          </a>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3.5 px-4">
                       <span className="font-mono text-blue-700 font-bold text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-200">{item.sku || 'N/A'}</span>
@@ -420,6 +437,21 @@ export default function InventoryPage() {
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* PRODUCT WEB URL SECTION */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                <label className="block text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <LinkIcon className="w-4 h-4 text-blue-600" />
+                  Product Web URL (Amazon, Supplier, Store Link):
+                </label>
+                <input
+                  type="url"
+                  value={formData.product_url}
+                  onChange={(e) => setFormData({ ...formData, product_url: e.target.value })}
+                  placeholder="https://amazon.com/dp/... or store URL"
+                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-blue-700 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
               </div>
 
               {/* LINK CHANNEL PARTNER ACCOUNT */}

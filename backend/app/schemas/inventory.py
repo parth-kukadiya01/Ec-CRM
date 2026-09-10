@@ -12,6 +12,7 @@ class InventoryBase(BaseModel):
     partner_id: Optional[int] = None
     partner_name: Optional[str] = None
     image_url: Optional[str] = None
+    product_url: Optional[str] = None
 
 class InventoryCreate(InventoryBase):
     pass
@@ -26,6 +27,7 @@ class InventoryUpdate(BaseModel):
     partner_id: Optional[int] = None
     partner_name: Optional[str] = None
     image_url: Optional[str] = None
+    product_url: Optional[str] = None
 
 class InventoryResponse(InventoryBase):
     id: int

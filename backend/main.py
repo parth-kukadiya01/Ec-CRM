@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
         db_tables = inspector.get_table_names()
+        is_sqlite_db = engine.dialect.name == "sqlite"
         with engine.connect() as conn:
             for table_name, table in Base.metadata.tables.items():
                 if table_name in db_tables:
@@ -61,7 +62,10 @@ async def lifespan(app: FastAPI):
                         if col.name not in existing_cols:
                             col_type = col.type.compile(engine.dialect)
                             logger.info(f"Auto-migrating: Adding missing column {col.name} ({col_type}) to table {table_name}")
-                            conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}'))
+                            if is_sqlite_db:
+                                conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}'))
+                            else:
+                                conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}'))
                             conn.commit()
     except Exception as e:
         logger.error(f"Error during auto-column migration: {e}")

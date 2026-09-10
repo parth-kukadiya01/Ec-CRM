@@ -69,6 +69,7 @@ export default function OrdersPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
 
+
   // Alerts for CSV Upload
   const [uploadingCsv, setUploadingCsv] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -136,6 +137,7 @@ export default function OrdersPage() {
   const [fetchingUrlImage, setFetchingUrlImage] = useState(false);
   const [urlFetchStatus, setUrlFetchStatus] = useState<string | null>(null);
   const urlFetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const prevFilterKeyRef = useRef<string>('');
 
   const isDirectImageUrl = (url: string) => {
     if (!url) return false;
@@ -213,7 +215,33 @@ export default function OrdersPage() {
   };
 
   // Single Order Form State
-  const [orderForm, setOrderForm] = useState({
+  const [orderForm, setOrderForm] = useState<{
+    product_id?: number;
+    order_process_date: string;
+    shipping_date: string;
+    last_delivery_date: string;
+    arriving_date: string;
+    company: string;
+    shipment_id: string;
+    order_number: string;
+    seller_account: string;
+    product_name: string;
+    product_url: string;
+    product_image: string;
+    qty: number;
+    price_usd: number;
+    order_status: string;
+    consignee_name: string;
+    shipment_address_1: string;
+    shipment_address_2: string;
+    city: string;
+    state: string;
+    zip_code: string;
+    mobile_number: string;
+    country: string;
+    status: string;
+  }>({
+    product_id: undefined,
     order_process_date: new Date().toISOString().split('T')[0],
     shipping_date: '',
     last_delivery_date: '',
@@ -239,6 +267,133 @@ export default function OrdersPage() {
     status: 'ADBH'
   });
 
+  // Multi-Product Form State for Orders
+  const createBlankProduct = () => ({
+    id: 'prod_' + Math.random().toString(36).substring(2, 9),
+    product_id: undefined as number | undefined,
+    product_name: '',
+    product_url: '',
+    product_image: '',
+    qty: 1,
+    fetchingUrlImage: false,
+    urlFetchStatus: null as string | null,
+    isDraggingImage: false,
+    uploadingImage: false,
+    showProductDropdown: false,
+  });
+
+  type ProductItemType = ReturnType<typeof createBlankProduct>;
+  const [orderProducts, setOrderProducts] = useState<ProductItemType[]>([createBlankProduct()]);
+
+  const handleAddProductItem = () => {
+    setOrderProducts(prev => [...prev, createBlankProduct()]);
+  };
+
+  const handleRemoveProductItem = (id: string) => {
+    if (orderProducts.length <= 1) return;
+    setOrderProducts(prev => prev.filter(p => p.id !== id));
+  };
+
+  const handleUpdateProductItem = (id: string, updates: Partial<ProductItemType>) => {
+    setOrderProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  };
+
+  const fetchImageForProduct = async (rawUrl: string, productId: string) => {
+    if (!rawUrl || !rawUrl.trim()) return;
+    let targetUrl = rawUrl.trim();
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://') && !targetUrl.startsWith('data:')) {
+      targetUrl = `https://${targetUrl}`;
+    }
+
+    if (isDirectImageUrl(targetUrl)) {
+      handleUpdateProductItem(productId, { product_url: targetUrl, product_image: targetUrl, urlFetchStatus: 'Direct image loaded' });
+      setTimeout(() => {
+        handleUpdateProductItem(productId, { urlFetchStatus: null });
+      }, 3000);
+      return;
+    }
+
+    handleUpdateProductItem(productId, { fetchingUrlImage: true, urlFetchStatus: 'Extracting image...' });
+    try {
+      const res = await ordersApi.extractUrlImage(targetUrl);
+      if (res.data?.success && res.data?.image_url) {
+        setOrderProducts(prev => prev.map(p => {
+          if (p.id !== productId) return p;
+          return {
+            ...p,
+            product_image: res.data.image_url,
+            product_name: (!p.product_name && res.data.title) ? res.data.title : p.product_name,
+            fetchingUrlImage: false,
+            urlFetchStatus: 'Image auto-loaded'
+          };
+        }));
+        setTimeout(() => {
+          handleUpdateProductItem(productId, { urlFetchStatus: null });
+        }, 3500);
+      } else {
+        handleUpdateProductItem(productId, {
+          fetchingUrlImage: false,
+          urlFetchStatus: res.data?.message || 'No image found'
+        });
+        setTimeout(() => {
+          handleUpdateProductItem(productId, { urlFetchStatus: null });
+        }, 4000);
+      }
+    } catch {
+      handleUpdateProductItem(productId, {
+        fetchingUrlImage: false,
+        urlFetchStatus: 'Could not extract image'
+      });
+      setTimeout(() => {
+        handleUpdateProductItem(productId, { urlFetchStatus: null });
+      }, 4000);
+    }
+  };
+
+  const handleProductUrlChangeForProduct = (val: string, productId: string) => {
+    handleUpdateProductItem(productId, { product_url: val });
+    if (!val || !val.trim()) return;
+
+    const trimmed = val.trim();
+    if (isDirectImageUrl(trimmed)) {
+      handleUpdateProductItem(productId, { product_url: val, product_image: trimmed, urlFetchStatus: 'Direct image loaded' });
+      setTimeout(() => {
+        handleUpdateProductItem(productId, { urlFetchStatus: null });
+      }, 3000);
+      return;
+    }
+
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('.')) {
+      setTimeout(() => {
+        fetchImageForProduct(trimmed, productId);
+      }, 700);
+    }
+  };
+
+  const processUploadedImageForProduct = async (file: File, productId: string) => {
+    try {
+      handleUpdateProductItem(productId, { uploadingImage: true });
+      let imgUrl = '';
+      try {
+        const uploadRes = await uploadApi.uploadFile(file);
+        imgUrl = uploadRes.data?.file_url || '';
+      } catch {
+        imgUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+      }
+      if (imgUrl) {
+        handleUpdateProductItem(productId, { product_image: imgUrl, uploadingImage: false });
+      } else {
+        handleUpdateProductItem(productId, { uploadingImage: false });
+      }
+    } catch {
+      handleUpdateProductItem(productId, { uploadingImage: false });
+    }
+  };
+
   const getNextSequentialShipmentId = (ordersList: any[]): string => {
     let maxNum = 0;
     let prefix = 'INBTL';
@@ -262,9 +417,11 @@ export default function OrdersPage() {
     return `${prefix}${nextNum.toString().padStart(digitsLen, '0')}`;
   };
 
-  const loadData = async () => {
+  const loadData = async (showLoading: boolean = false) => {
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
       const meRes = await authApi.getMe().catch(() => ({ data: null }));
       const accRes = await accountsApi.list().catch(() => ({ data: [] }));
@@ -287,12 +444,14 @@ export default function OrdersPage() {
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
   }, []);
 
   // Close dropdowns on click outside
@@ -303,6 +462,12 @@ export default function OrdersPage() {
       }
       if (productDropdownRef.current && !productDropdownRef.current.contains(e.target as Node)) {
         setShowProductDropdown(false);
+      }
+      // Only close multi-product dropdowns if click is outside all product dropdown containers
+      const target = e.target as HTMLElement;
+      const isInsideProductDropdown = target.closest('[data-product-dropdown]');
+      if (!isInsideProductDropdown) {
+        setOrderProducts(prev => prev.some(p => p.showProductDropdown) ? prev.map(p => ({ ...p, showProductDropdown: false })) : prev);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -528,7 +693,23 @@ export default function OrdersPage() {
     }
 
     setFilteredOrders(result);
-    setCurrentPage(1);
+
+    const currentFilterKey = [
+      selectedCompany,
+      selectedSellerAccount,
+      selectedPurchaseStatus,
+      selectedStatus,
+      dateFieldType,
+      searchQuery,
+      startDate,
+      endDate,
+      currentUser?.id
+    ].join('::');
+
+    if (prevFilterKeyRef.current !== currentFilterKey) {
+      prevFilterKeyRef.current = currentFilterKey;
+      setCurrentPage(1);
+    }
   }, [
     orders,
     purchasesList,
@@ -544,6 +725,7 @@ export default function OrdersPage() {
     companiesList,
     partnersList
   ]);
+
 
   // Helper to strictly get accounts connected to selected Company or Partner
   const getAccountsForEntity = (selectedEntity: string): string[] => {
@@ -737,21 +919,59 @@ export default function OrdersPage() {
         alert('Please enter the Vendor / Supplier Name');
         return;
       }
-      if (!purchaseForm.bank?.trim()) {
-        alert('Please enter the Bank / Payment Mode');
-        return;
-      }
       if (!purchaseForm.estimated_shipment_date) {
         alert('Please enter the Arrived Delivery Date');
         return;
       }
     }
 
+    const currentScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+
     try {
       const totalCost = isNaN(pVal) ? 0 : pVal;
       const isStock = Boolean(purchaseForm.is_in_stock);
       const purStatus = isStock ? 'Received' : 'Pending';
       const ordStatus = isStock ? 'In Stock' : 'Purchase Pending';
+
+      const newPurchaseRecord = {
+        order_id: purchaseForm.order_id,
+        order_date: purchaseForm.order_date || new Date().toISOString().split('T')[0],
+        product_name: purchaseForm.product_name || selectedOrderForPurchase.product_name || 'Item',
+        sku: purchaseForm.sku || null,
+        gst_type: purchaseForm.gst_type || 'GST',
+        bank: purchaseForm.bank || (isStock ? 'In Stock' : null),
+        po_number: purchaseForm.po_number || null,
+        purchase_value: totalCost,
+        delivery_code: purchaseForm.delivery_code || selectedOrderForPurchase.oi || null,
+        estimated_shipment_date: purchaseForm.estimated_shipment_date || new Date().toISOString().split('T')[0],
+        account_name: purchaseForm.account_name || selectedOrderForPurchase.account_name || null,
+        purchase_partner_name: purchaseForm.purchase_partner_name?.trim() || (isStock ? 'In Stock' : 'Self / Vendor'),
+        payment_status: purchaseForm.payment_status || 'Paid',
+        status: purStatus,
+        notes: purchaseForm.notes || (isStock ? 'In-Stock Order' : null),
+        company: purchaseForm.company || selectedOrderForPurchase.company || 'ADBH',
+        qty: parseInt(String(purchaseForm.qty)) || selectedOrderForPurchase.qty || 1,
+        is_in_stock: isStock,
+        created_at: new Date().toISOString()
+      };
+
+      setPurchasesList(prev => {
+        const idx = prev.findIndex((p: any) => p.order_id === purchaseForm.order_id);
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], ...newPurchaseRecord };
+          return updated;
+        }
+        return [newPurchaseRecord, ...prev];
+      });
+
+      setOrders(prev => prev.map(o => o.id === purchaseForm.order_id ? {
+        ...o,
+        purchase_cost_inr: totalCost,
+        oi: purchaseForm.delivery_code || o.oi,
+        status: ordStatus,
+        arriving_date: purchaseForm.estimated_shipment_date || o.arriving_date
+      } : o));
 
       await purchasesApi.create({
         order_id: purchaseForm.order_id,
@@ -784,7 +1004,10 @@ export default function OrdersPage() {
       });
 
       setShowPurchaseModal(false);
-      loadData();
+      await loadData(false);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+      }
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error saving purchase entry';
@@ -814,6 +1037,7 @@ export default function OrdersPage() {
     const initialAccounts = getAccountsForEntity(defaultCompany);
     const defaultSellerAccount = initialAccounts.length === 1 ? initialAccounts[0] : '';
     setOrderForm({
+      product_id: undefined,
       order_process_date: new Date().toISOString().split('T')[0],
       shipping_date: '',
       last_delivery_date: '',
@@ -838,6 +1062,7 @@ export default function OrdersPage() {
       country: '',
       status: 'ADBH'
     });
+    setOrderProducts([createBlankProduct()]);
     setSellerSearch(defaultSellerAccount);
     setShowAddModal(true);
   };
@@ -845,20 +1070,64 @@ export default function OrdersPage() {
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const validProducts = orderProducts.map(p => ({
+        ...p,
+        product_name: p.product_name.trim(),
+        qty: parseInt(String(p.qty)) || 1,
+      }));
+
+      for (let i = 0; i < validProducts.length; i++) {
+        if (!validProducts[i].product_name) {
+          alert(`Please enter a Product Name for Product #${i + 1}`);
+          return;
+        }
+      }
+
+      const finalOrderNumber = orderForm.order_number?.trim() || `114-${Math.floor(1000000 + Math.random() * 9000000)}-${Math.floor(1000000 + Math.random() * 9000000)}`;
+      const totalQty = validProducts.reduce((sum, p) => sum + p.qty, 0);
+      const combinedProductName = validProducts.length === 1
+        ? validProducts[0].product_name
+        : validProducts.map(p => p.product_name).join(' | ');
+
+      const productItemsJson = JSON.stringify(validProducts.map(p => ({
+        product_id: p.product_id || null,
+        product_name: p.product_name,
+        product_url: p.product_url ? p.product_url.trim() : null,
+        product_image: p.product_image || null,
+        qty: p.qty,
+      })));
+
       const payload = {
-        ...orderForm,
-        status: orderForm.status || 'Pending',
-        order_status: orderForm.order_status || 'ADBH',
-        price_usd: parseFloat(orderForm.price_usd as any) || 0,
-        qty: parseInt(orderForm.qty as any) || 1,
         order_process_date: orderForm.order_process_date || null,
         shipping_date: orderForm.shipping_date || null,
         last_delivery_date: orderForm.last_delivery_date || null,
         arriving_date: orderForm.arriving_date || null,
+        company: orderForm.company,
+        shipment_id: orderForm.shipment_id?.trim() || undefined,
+        order_number: finalOrderNumber,
+        seller_account: orderForm.seller_account || '',
+        product_id: validProducts[0].product_id || undefined,
+        product_name: combinedProductName,
+        product_url: validProducts[0].product_url ? validProducts[0].product_url.trim() : null,
+        product_image: validProducts[0].product_image || null,
+        product_items: productItemsJson,
+        qty: totalQty,
+        price_usd: parseFloat(String(orderForm.price_usd)) || 0,
+        order_status: orderForm.order_status || 'ADBH',
+        consignee_name: orderForm.consignee_name || 'Consignee',
+        shipment_address_1: orderForm.shipment_address_1 || '',
+        shipment_address_2: orderForm.shipment_address_2 || '',
+        city: orderForm.city || '',
+        state: orderForm.state || '',
+        zip_code: orderForm.zip_code || '',
+        mobile_number: orderForm.mobile_number || '',
+        country: orderForm.country || 'USA',
+        status: orderForm.status || 'Pending'
       };
+
       await ordersApi.create(payload);
       setShowAddModal(false);
-      loadData();
+      loadData(false);
     } catch (err: any) {
       console.error('Failed to create order', err);
       const msg = err.response?.data?.detail || 'Error creating order. Please check inputs.';
@@ -871,7 +1140,53 @@ export default function OrdersPage() {
     if (urlFetchTimeoutRef.current) clearTimeout(urlFetchTimeoutRef.current);
     setFetchingUrlImage(false);
     setUrlFetchStatus(null);
+    const matchedInv = inventoryList.find((item: any) =>
+      (ord.product_id && item.id === ord.product_id) ||
+      (item.product_name && ord.product_name && item.product_name.toLowerCase().trim() === ord.product_name.toLowerCase().trim())
+    );
+
+    let parsedItems: any[] = [];
+    try {
+      if (ord.product_items) {
+        const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          parsedItems = parsed;
+        }
+      }
+    } catch (e) {}
+
+    if (parsedItems.length > 0) {
+      setOrderProducts(parsedItems.map((p: any) => ({
+        id: 'prod_' + Math.random().toString(36).substring(2, 9),
+        product_id: p.product_id || undefined,
+        product_name: p.product_name || '',
+        product_url: p.product_url || '',
+        product_image: p.product_image || '',
+        qty: p.qty || 1,
+        fetchingUrlImage: false,
+        urlFetchStatus: null,
+        isDraggingImage: false,
+        uploadingImage: false,
+        showProductDropdown: false,
+      })));
+    } else {
+      setOrderProducts([{
+        id: 'prod_' + Math.random().toString(36).substring(2, 9),
+        product_id: ord.product_id || matchedInv?.id || undefined,
+        product_name: ord.product_name || '',
+        product_url: ord.product_url || matchedInv?.product_url || '',
+        product_image: ord.product_image || matchedInv?.image_url || '',
+        qty: ord.qty || 1,
+        fetchingUrlImage: false,
+        urlFetchStatus: null,
+        isDraggingImage: false,
+        uploadingImage: false,
+        showProductDropdown: false,
+      }]);
+    }
+
     setOrderForm({
+      product_id: ord.product_id || matchedInv?.id || undefined,
       order_process_date: ord.order_process_date || ord.order_date || new Date().toISOString().split('T')[0],
       shipping_date: ord.shipping_date || '',
       last_delivery_date: ord.last_delivery_date || '',
@@ -881,8 +1196,8 @@ export default function OrdersPage() {
       order_number: ord.order_number || '',
       seller_account: ord.seller_account || '',
       product_name: ord.product_name || '',
-      product_url: ord.product_url || '',
-      product_image: ord.product_image || '',
+      product_url: ord.product_url || matchedInv?.product_url || '',
+      product_image: ord.product_image || matchedInv?.image_url || '',
       qty: ord.qty || 1,
       price_usd: ord.price_usd || ord.product_price || 0,
       order_status: ord.order_status || 'ADBH',
@@ -904,12 +1219,43 @@ export default function OrdersPage() {
     e.preventDefault();
     if (!editingOrder) return;
     try {
+      const validProducts = orderProducts.map(p => ({
+        ...p,
+        product_name: p.product_name.trim(),
+        qty: parseInt(String(p.qty)) || 1,
+      }));
+
+      for (let i = 0; i < validProducts.length; i++) {
+        if (!validProducts[i].product_name) {
+          alert(`Please enter a Product Name for Product #${i + 1}`);
+          return;
+        }
+      }
+
+      const totalQty = validProducts.reduce((sum, p) => sum + p.qty, 0);
+      const combinedProductName = validProducts.length === 1
+        ? validProducts[0].product_name
+        : validProducts.map(p => p.product_name).join(' | ');
+
+      const productItemsJson = JSON.stringify(validProducts.map(p => ({
+        product_id: p.product_id || null,
+        product_name: p.product_name,
+        product_url: p.product_url ? p.product_url.trim() : null,
+        product_image: p.product_image || null,
+        qty: p.qty,
+      })));
+
       const payload = {
         ...orderForm,
+        product_id: validProducts[0].product_id || undefined,
+        product_name: combinedProductName,
+        product_url: validProducts[0].product_url ? validProducts[0].product_url.trim() : null,
+        product_image: validProducts[0].product_image || null,
+        product_items: productItemsJson,
+        qty: totalQty,
+        price_usd: parseFloat(orderForm.price_usd as any) || 0,
         status: orderForm.status || editingOrder.status || 'Pending',
         order_status: orderForm.order_status || 'ADBH',
-        price_usd: parseFloat(orderForm.price_usd as any) || 0,
-        qty: parseInt(orderForm.qty as any) || 1,
         order_process_date: orderForm.order_process_date || null,
         shipping_date: orderForm.shipping_date || null,
         last_delivery_date: orderForm.last_delivery_date || null,
@@ -1394,33 +1740,91 @@ export default function OrdersPage() {
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">{ord.order_number}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium max-w-[150px] truncate">{ord.seller_account || ''}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327] max-w-[220px] truncate" title={ord.product_name}>
-                          <div className="flex items-center gap-2">
-                            {ord.product_image && (
-                              /* eslint-disable-next-line @next/next/no-img-element */
-                              <img
-                                src={getImageUrl(ord.product_image)}
-                                alt=""
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
-                                }}
-                                className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                              />
-                            )}
-                            {ord.product_url ? (
-                              <a
-                                href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
-                              >
-                                <span className="truncate">{ord.product_name}</span>
-                                <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
-                              </a>
-                            ) : (
-                              <span>{ord.product_name}</span>
-                            )}
-                          </div>
+                        {/* Product Name (handles single & multi-product cleanly) */}
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327] min-w-[200px] max-w-[260px]">
+                          {(() => {
+                            let items: any[] = [];
+                            try {
+                              if (ord.product_items) {
+                                const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+                                if (Array.isArray(parsed) && parsed.length > 0) items = parsed;
+                              }
+                            } catch (e) {}
+
+                            if (items.length > 1) {
+                              return (
+                                <div className="flex flex-col gap-1.5 py-1">
+                                  {items.map((item: any, i: number) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                      {item.product_image ? (
+                                        /* eslint-disable-next-line @next/next/no-img-element */
+                                        <img
+                                          src={getImageUrl(item.product_image)}
+                                          alt=""
+                                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                          className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                        />
+                                      ) : (
+                                        <div className="w-5 h-5 rounded-xs bg-[#f0f0f1] border border-[#c3c4c7] flex items-center justify-center text-[9px] font-bold text-[#50575e] shrink-0">
+                                          P{i + 1}
+                                        </div>
+                                      )}
+                                      <div className="min-w-0 flex-1">
+                                        {item.product_url ? (
+                                          <a
+                                            href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-[170px]"
+                                            title={item.product_name}
+                                          >
+                                            <span className="truncate">{item.product_name}</span>
+                                            <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
+                                          </a>
+                                        ) : (
+                                          <span className="font-semibold text-xs truncate block max-w-[170px]" title={item.product_name}>
+                                            {item.product_name}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="inline-flex items-center px-1.5 py-0.2 bg-[#2271b1]/10 text-[#2271b1] text-[10px] font-extrabold rounded-xs border border-[#2271b1]/20 shrink-0">
+                                        ×{item.qty || 1}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="flex items-center gap-2">
+                                {ord.product_image && (
+                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                  <img
+                                    src={getImageUrl(ord.product_image)}
+                                    alt=""
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                    className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                  />
+                                )}
+                                {ord.product_url ? (
+                                  <a
+                                    href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
+                                  >
+                                    <span className="truncate">{ord.product_name}</span>
+                                    <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
+                                  </a>
+                                ) : (
+                                  <span className="truncate max-w-[200px]" title={ord.product_name}>{ord.product_name}</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">${(ord.price_usd || ord.product_price || 0).toFixed(2)}</td>
@@ -1435,7 +1839,6 @@ export default function OrdersPage() {
                                   s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
                                     s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
                                       'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
-
                             return (
                               <select
                                 value={matchedStatus}
@@ -1453,7 +1856,6 @@ export default function OrdersPage() {
                         </td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
                           {(() => {
-                            const matchingPur = purchasesList.find((p: any) => p.order_id === ord.id);
                             const isStockDone = Boolean(
                               matchingPur && (
                                 matchingPur.is_in_stock ||
@@ -1464,7 +1866,6 @@ export default function OrdersPage() {
                             );
                             const isPurchaseDone = Boolean(matchingPur && !isStockDone);
                             const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
-
                             if (isStockDone) {
                               return (
                                 <div className="flex flex-col items-center justify-center gap-0.5">
@@ -1473,95 +1874,52 @@ export default function OrdersPage() {
                                       <Truck className="w-3 h-3 text-emerald-700" />
                                       <span>In Stock</span>
                                     </span>
-                                    <button
-                                      onClick={() => openPurchaseModal(ord, true)}
-                                      className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors"
-                                      title="Edit In-Stock Entry"
-                                    >
+                                    <button onClick={() => openPurchaseModal(ord, true)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit In-Stock Entry">
                                       <Edit2 className="w-3 h-3" />
                                     </button>
                                   </div>
-                                  {actionTimestamp && (
-                                    <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">
-                                      {actionTimestamp}
-                                    </span>
-                                  )}
+                                  {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
                                 </div>
                               );
                             }
-
                             if (isPurchaseDone) {
-                              const pVal = matchingPur?.purchase_value || ord.purchase_cost_inr || 0;
                               return (
                                 <div className="flex flex-col items-center justify-center gap-0.5">
                                   <div className="flex items-center justify-center gap-1.5">
                                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-blue-100 text-blue-900 border border-blue-300 shadow-xs">
                                       <CheckCircle2 className="w-3 h-3 text-blue-700" />
-                                      <span>
-                                        {pVal > 0 ? `Purchased` : 'Purchased'}
-                                      </span>
+                                      <span>Purchased</span>
                                     </span>
-                                    <button
-                                      onClick={() => openPurchaseModal(ord, false)}
-                                      className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors"
-                                      title="Edit Purchase Entry"
-                                    >
+                                    <button onClick={() => openPurchaseModal(ord, false)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Purchase Entry">
                                       <Edit2 className="w-3 h-3" />
                                     </button>
                                   </div>
-                                  {actionTimestamp && (
-                                    <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">
-                                      {actionTimestamp}
-                                    </span>
-                                  )}
+                                  {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
                                 </div>
                               );
                             }
-
                             const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
-
                             return (
                               <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
                                 <div className="flex items-center justify-center gap-1.5">
-                                  <button
-                                    onClick={() => handleMarkInStock(ord)}
-                                    className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
-                                    title="Item is already in stock - send directly to Shipments"
-                                  >
-                                    <Truck className="w-3 h-3" />
-                                    <span>In Stock</span>
+                                  <button onClick={() => handleMarkInStock(ord)} className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Item is already in stock">
+                                    <Truck className="w-3 h-3" /><span>In Stock</span>
                                   </button>
-                                  <button
-                                    onClick={() => openPurchaseModal(ord)}
-                                    className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
-                                    title="Create purchase order entry"
-                                  >
-                                    <Plus className="w-3 h-3" />
-                                    <span>Purchase Entry</span>
+                                  <button onClick={() => openPurchaseModal(ord)} className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Create purchase order entry">
+                                    <Plus className="w-3 h-3" /><span>Purchase Entry</span>
                                   </button>
                                 </div>
                                 {dueInfo && (
-                                  <span
-                                    className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue
-                                        ? 'bg-red-100 text-red-900 border-red-300'
-                                        : 'bg-amber-100 text-amber-900 border-amber-300'
-                                      }`}
-                                    title={`Purchase Due Date: ${dueInfo.formatted} (5 days before delivery: ${ord.last_delivery_date || ord.shipping_date})`}
-                                  >
+                                  <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue ? 'bg-red-100 text-red-900 border-red-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`} title={`Purchase Due Date: ${dueInfo.formatted}`}>
                                     <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
-                                    <span>
-                                      Due: {dueInfo.formatted}
-                                      {dueInfo.isOverdue
-                                        ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)`
-                                        : ' (Due Today!)'}
-                                    </span>
+                                    <span>Due: {dueInfo.formatted}{dueInfo.isOverdue ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)` : ' (Due Today!)'}</span>
                                   </span>
                                 )}
                               </div>
                             );
                           })()}
                         </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327] max-w-[150px] truncate">{ord.consignee_name || '—'}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.consignee_name}>{ord.consignee_name || ord.buyer_name || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] max-w-[180px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate">{ord.shipment_address_2 || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.city || '—'}</td>
@@ -1569,63 +1927,20 @@ export default function OrdersPage() {
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-center">{ord.zip_code || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] text-center">{ord.mobile_number || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold uppercase text-center">{ord.country || 'USA'}</td>
-                        {/* ── Label Cell ── */}
                         <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
                           {ord.label_pdf_url ? (
                             <div className="flex items-center justify-center gap-1.5">
-                              <a
-                                href={`/backend-api/orders/${ord.id}/download-label?download=1`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                download={`${ord.label_tracking_id || ord.order_number || 'label'} - ${ord.product_name}.pdf`}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-300 rounded-xs text-[11px] font-bold hover:bg-indigo-200 transition-colors shadow-2xs"
-                                title="Download Label PDF"
-                              >
-                                <FileText className="w-3 h-3" />
-                                <span>Label</span>
+                              <a href={`/backend-api/orders/${ord.id}/download-label?download=1`} target="_blank" rel="noopener noreferrer" download={`${ord.label_tracking_id || ord.order_number || 'label'} - ${ord.product_name}.pdf`} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-300 rounded-xs text-[11px] font-bold hover:bg-indigo-200 transition-colors shadow-2xs" title="Download Label PDF">
+                                <FileText className="w-3 h-3" /><span>Label</span>
                               </a>
-                              {canEdit && (
-                                <button
-                                  onClick={() => openLabelModal(ord)}
-                                  className="p-1 text-[#2271b1] hover:text-[#135e96] hover:bg-[#f0f0f1] rounded-xs transition-colors"
-                                  title="Update label PDF & cost"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                              )}
+                              {canEdit && (<button onClick={() => openLabelModal(ord)} className="p-1 text-[#2271b1] hover:text-[#135e96] hover:bg-[#f0f0f1] rounded-xs transition-colors" title="Update label PDF & cost"><Edit2 className="w-3 h-3" /></button>)}
                             </div>
-                          ) : (
-                            canEdit ? (
-                              <button
-                                onClick={() => openLabelModal(ord)}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-dashed border-[#8c8f94] hover:border-[#2271b1] hover:bg-[#e8f3fc] text-[#50575e] hover:text-[#2271b1] rounded-xs text-[11px] font-semibold transition-all"
-                                title="Upload label PDF"
-                              >
-                                <Tag className="w-3 h-3" />
-                                <span>Label</span>
-                              </button>
-                            ) : (
-                              <span className="text-[#a7aaad] text-[11px]">—</span>
-                            )
-                          )}
+                          ) : (canEdit ? (<button onClick={() => openLabelModal(ord)} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-dashed border-[#8c8f94] hover:border-[#2271b1] hover:bg-[#e8f3fc] text-[#50575e] hover:text-[#2271b1] rounded-xs text-[11px] font-semibold transition-all" title="Upload label PDF"><Tag className="w-3 h-3" /><span>Label</span></button>) : (<span className="text-[#a7aaad] text-[11px]">—</span>))}
                         </td>
-                        <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'
-                          }`}>
+                        <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'}`}>
                           <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => openEditModal(ord)}
-                              className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors"
-                              title="Edit Order"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteOrder(ord.id)}
-                              className="p-1 hover:bg-red-600 hover:text-white text-red-600 rounded-xs transition-colors"
-                              title="Delete Order"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <button onClick={() => openEditModal(ord)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Order"><Edit2 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => handleDeleteOrder(ord.id)} className="p-1 hover:bg-red-600 hover:text-white text-red-600 rounded-xs transition-colors" title="Delete Order"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         </td>
                       </tr>
@@ -1894,296 +2209,358 @@ export default function OrdersPage() {
                 </div>
               </div>
 
-              {/* PRODUCT SPECIFICATIONS & PRICE */}
-              <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-4">
-                <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider border-b border-[#c3c4c7] pb-2 flex items-center gap-2">
-                  <ShoppingCart className="w-4 h-4 text-[#2271b1]" />
-                  Product Specifications & Price
-                </h3>
+              {/* PRODUCT SPECIFICATIONS */}
+              <div className="space-y-4">
+                {orderProducts.map((prod, pIdx) => {
+                  const matchingItems = (prod.product_name || '').trim()
+                    ? inventoryList.filter((item: any) =>
+                      item.product_name?.toLowerCase().includes((prod.product_name || '').toLowerCase().trim()) ||
+                      item.sku?.toLowerCase().includes((prod.product_name || '').toLowerCase().trim())
+                    ).slice(0, 10)
+                    : [];
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
-                  {/* Searchable Product Name Input with Auto-Image and Auto-Price Sync */}
-                  <div className="md:col-span-2 relative" ref={productDropdownRef}>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
-                      <span>Product Name *</span>
-                    </label>
-                    <div className="relative">
+                  return (
+                    <div key={prod.id} className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-4 relative">
+                      <div className="flex items-center justify-between border-b border-[#c3c4c7] pb-2">
+                        <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider flex items-center gap-2">
+                          <ShoppingCart className="w-4 h-4 text-[#2271b1]" />
+                          <span>Product #{pIdx + 1} Specifications</span>
+                        </h3>
+                        {orderProducts.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProductItem(prod.id)}
+                            className="text-red-600 hover:text-red-800 text-[11px] font-bold flex items-center gap-1 hover:bg-red-50 px-2 py-0.5 rounded-xs transition-colors cursor-pointer"
+                            title="Remove this product"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove Product</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+                        {/* Searchable Product Name Input with Auto-Image and Auto-Price Sync */}
+                        <div className="md:col-span-2 relative" data-product-dropdown>
+                          <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                            <span>Product Name *</span>
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              placeholder="Type to search database or enter new product..."
+                              value={prod.product_name}
+                              onFocus={() => handleUpdateProductItem(prod.id, { showProductDropdown: true })}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const matched = inventoryList.find((item: any) =>
+                                  item.product_name?.toLowerCase().trim() === val.toLowerCase().trim()
+                                );
+                                handleUpdateProductItem(prod.id, {
+                                  product_name: val,
+                                  product_id: matched ? matched.id : undefined,
+                                  showProductDropdown: true,
+                                  ...(matched ? {
+                                    product_url: matched.product_url || prod.product_url || '',
+                                    product_image: matched.image_url || prod.product_image,
+                                  } : {})
+                                });
+                                if (matched?.price && (!orderForm.price_usd || orderForm.price_usd === 0)) {
+                                  setOrderForm(f => ({ ...f, price_usd: matched.price }));
+                                }
+                              }}
+                              className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1]"
+                              required
+                            />
+                          </div>
+
+                          {/* Filtered Search Dropdown for Existing Products */}
+                          {prod.showProductDropdown && matchingItems.length > 0 && (
+                            <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-[#c3c4c7] rounded-sm shadow-lg max-h-56 overflow-y-auto">
+                              {matchingItems.map((item: any) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  onClick={() => {
+                                    handleUpdateProductItem(prod.id, {
+                                      product_id: item.id,
+                                      product_name: item.product_name,
+                                      product_url: item.product_url || prod.product_url || '',
+                                      product_image: item.image_url || prod.product_image,
+                                      showProductDropdown: false,
+                                    });
+                                    if (item.price && (!orderForm.price_usd || orderForm.price_usd === 0)) {
+                                      setOrderForm(f => ({ ...f, price_usd: item.price }));
+                                    }
+                                  }}
+                                  className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-[#2271b1]/10 border-b border-[#e0e0e0] flex items-center justify-between transition-colors cursor-pointer"
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    {item.image_url ? (
+                                      /* eslint-disable-next-line @next/next/no-img-element */
+                                      <img src={getImageUrl(item.image_url)} alt="" className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0" />
+                                    ) : (
+                                      <div className="w-7 h-7 rounded-xs bg-[#f6f7f7] border border-[#c3c4c7] flex items-center justify-center text-[#50575e] font-bold text-[10px] shrink-0">
+                                        PROD
+                                      </div>
+                                    )}
+                                    <div className="truncate">
+                                      <div className="font-bold text-[#1d2327] truncate flex items-center gap-2">
+                                        <span>{item.product_name}</span>
+                                        {item.stock_quantity > 0 && (
+                                          <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[9px] rounded-xs">
+                                            📦 {item.stock_quantity} in stock
+                                          </span>
+                                        )}
+                                        {item.product_url && (
+                                          <span className="px-1 py-0.2 bg-blue-50 text-blue-700 border border-blue-200 font-bold text-[9px] rounded-xs flex items-center gap-0.5" title={item.product_url}>
+                                            <LinkIcon className="w-2.5 h-2.5" /> URL Saved
+                                          </span>
+                                        )}
+                                      </div>
+                                      {item.sku && <div className="text-[10px] text-[#50575e] font-mono">SKU: {item.sku}</div>}
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0 ml-2">
+                                    <div className="font-bold text-[#00a32a] font-mono">${(item.price || 0).toFixed(2)}</div>
+                                    <div className="text-[9px] text-[#2271b1] font-bold">Auto-Pick Image</div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                            <span className="flex items-center gap-1">
+                              <LinkIcon className="w-3.5 h-3.5 text-[#2271b1]" />
+                              <span>Product URL</span>
+                            </span>
+                            {prod.fetchingUrlImage && (
+                              <span className="text-[10px] text-[#2271b1] font-bold flex items-center gap-1">
+                                <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Fetching image...
+                              </span>
+                            )}
+                            {!prod.fetchingUrlImage && prod.urlFetchStatus && (
+                              <span className="text-[10px] text-emerald-700 font-bold max-w-[140px] truncate" title={prod.urlFetchStatus}>
+                                {prod.urlFetchStatus}
+                              </span>
+                            )}
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              type="url"
+                              placeholder="e.g. https://amazon.com/dp/... or image URL"
+                              value={prod.product_url || ''}
+                              onChange={(e) => handleUpdateProductItem(prod.id, { product_url: e.target.value })}
+                              onBlur={() => {
+                                if (prod.product_url && !prod.product_image) {
+                                  fetchImageForProduct(prod.product_url, prod.id);
+                                }
+                              }}
+                              className="w-full bg-white border border-[#8c8f94] p-2 pr-16 text-xs text-[#2271b1] font-semibold outline-none focus:border-[#2271b1]"
+                            />
+                            <div className="absolute right-1 flex items-center gap-1">
+                              {prod.product_url && (
+                                <a
+                                  href={prod.product_url.startsWith('http') ? prod.product_url : `https://${prod.product_url}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1 text-[#50575e] hover:text-[#2271b1] hover:bg-[#f0f0f1] rounded-xs"
+                                  title="Open URL in new tab"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => fetchImageForProduct(prod.product_url, prod.id)}
+                                disabled={prod.fetchingUrlImage || !prod.product_url}
+                                className="px-1.5 py-0.5 bg-[#f0f0f1] hover:bg-[#2271b1] hover:text-white text-[#2271b1] text-[10px] font-bold rounded-xs transition-colors flex items-center gap-1 border border-[#c3c4c7] cursor-pointer"
+                                title="Auto-fetch Product Image from URL"
+                              >
+                                <RefreshCw className={`w-2.5 h-2.5 ${prod.fetchingUrlImage ? 'animate-spin' : ''}`} />
+                                <span>Fetch</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-[#1d2327] mb-1">Qty *</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={prod.qty}
+                            onChange={(e) => handleUpdateProductItem(prod.id, { qty: parseInt(e.target.value) || 1 })}
+                            className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      {/* Product Image Display Preview */}
+                      <div>
+                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1">
+                            <ImageIcon className="w-3.5 h-3.5 text-[#2271b1]" />
+                            <span>Product Image</span>
+                          </span>
+                          {prod.product_image ? (
+                            <span className="text-[10px] text-[#00a32a] font-bold">Image Attached</span>
+                          ) : prod.fetchingUrlImage ? (
+                            <span className="text-[10px] text-[#2271b1] font-bold animate-pulse">Loading image...</span>
+                          ) : null}
+                        </label>
+                        <div className="h-9 bg-white border border-[#8c8f94] p-1 px-2.5 flex items-center justify-between rounded-xs">
+                          {prod.fetchingUrlImage ? (
+                            <div className="flex items-center gap-2 text-xs text-[#2271b1]">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span className="font-semibold">Auto-loading image from URL...</span>
+                            </div>
+                          ) : prod.product_image ? (
+                            <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={getImageUrl(prod.product_image)}
+                                alt="Product Preview"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                                className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                              />
+                              <span className="text-[11px] font-semibold text-[#1d2327] truncate">
+                                {prod.product_name || 'Product Image Preview'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-[#8c8f94] italic">No image auto-loaded (add URL above or upload below)</span>
+                          )}
+                          {prod.product_image && !prod.fetchingUrlImage && (
+                            <div className="flex items-center gap-1">
+                              <a
+                                href={getImageUrl(prod.product_image)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#2271b1] hover:text-[#135e96] p-0.5 rounded-xs"
+                                title="Open full image in new tab"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateProductItem(prod.id, { product_image: '' })}
+                                className="text-[#d63638] hover:text-red-800 p-0.5 rounded-xs cursor-pointer"
+                                title="Remove Image"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Drag & Drop Product Image Upload Container */}
+                      <div className="pt-2 border-t border-[#c3c4c7]">
+                        <label className="block text-[11px] font-bold text-[#50575e] mb-1">
+                          Product Image Upload (PNG, JPG, WEBP)
+                        </label>
+                        <div
+                          onDragOver={(e) => { e.preventDefault(); handleUpdateProductItem(prod.id, { isDraggingImage: true }); }}
+                          onDragLeave={() => handleUpdateProductItem(prod.id, { isDraggingImage: false })}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            handleUpdateProductItem(prod.id, { isDraggingImage: false });
+                            const file = e.dataTransfer.files?.[0];
+                            if (file && file.type.startsWith('image/')) {
+                              processUploadedImageForProduct(file, prod.id);
+                            }
+                          }}
+                          className={`relative border-2 border-dashed rounded-sm p-3 bg-white text-center cursor-pointer transition-all ${prod.isDraggingImage ? 'border-[#2271b1] bg-[#2271b1]/5' : 'border-[#8c8f94] hover:border-[#2271b1]'
+                            }`}
+                        >
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                processUploadedImageForProduct(file, prod.id);
+                              }
+                            }}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <div className="flex items-center justify-center gap-2 text-xs">
+                            <Upload className="w-4 h-4 text-[#2271b1]" />
+                            {prod.uploadingImage ? (
+                              <span className="font-bold text-[#2271b1]">Uploading product image...</span>
+                            ) : prod.product_image ? (
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-[#00a32a]">Image Attached & Saved</span>
+                                <span className="text-[10px] text-[#50575e] font-mono truncate max-w-[240px]">
+                                  ({prod.product_image.substring(0, 35)}...)
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="font-bold text-[#2c3338]">Drag & drop product image file here, or click to browse</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Add Product Button */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleAddProductItem}
+                    className="w-full py-2.5 px-4 bg-white hover:bg-[#2271b1]/5 border-2 border-dashed border-[#2271b1] text-[#2271b1] hover:text-[#135e96] hover:border-[#135e96] font-bold text-xs rounded-xs flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ Add Product</span>
+                  </button>
+                </div>
+
+                {/* Order Specifications: Single Selling Price & Status */}
+                <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-3">
+                  <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider border-b border-[#c3c4c7] pb-2 flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-[#00a32a]" />
+                    <span>Order Specifications & Price</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1">Selling Price ($) *</label>
                       <input
-                        type="text"
-                        placeholder="Type to search database or enter new product..."
-                        value={orderForm.product_name}
-                        onFocus={() => setShowProductDropdown(true)}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const matched = inventoryList.find((item: any) =>
-                            item.product_name?.toLowerCase() === val.toLowerCase()
-                          );
-                          setOrderForm(prev => ({
-                            ...prev,
-                            product_name: val,
-                            ...(matched ? {
-                              product_image: matched.image_url || prev.product_image,
-                              price_usd: matched.price || prev.price_usd
-                            } : {})
-                          }));
-                          setShowProductDropdown(true);
-                        }}
-                        className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1]"
+                        type="number"
+                        step="any"
+                        placeholder="0.00"
+                        value={orderForm.price_usd === 0 ? '' : orderForm.price_usd}
+                        onChange={(e) => setOrderForm(prev => ({ ...prev, price_usd: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-emerald-700 outline-none focus:border-[#2271b1]"
                         required
                       />
                     </div>
 
-                    {/* Filtered Search Dropdown for Existing Products - Only renders when matches exist */}
-                    {showProductDropdown && matchingProductItems.length > 0 && (
-                      <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-[#c3c4c7] rounded-sm shadow-lg max-h-56 overflow-y-auto">
-                        {matchingProductItems.map((item: any) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => {
-                              setOrderForm(prev => ({
-                                ...prev,
-                                product_name: item.product_name,
-                                product_image: item.image_url || prev.product_image,
-                                price_usd: item.price || prev.price_usd,
-                              }));
-                              setShowProductDropdown(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-[#2271b1]/10 border-b border-[#e0e0e0] flex items-center justify-between transition-colors"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              {item.image_url ? (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img src={getImageUrl(item.image_url)} alt="" className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0" />
-                              ) : (
-                                <div className="w-7 h-7 rounded-xs bg-[#f6f7f7] border border-[#c3c4c7] flex items-center justify-center text-[#50575e] font-bold text-[10px] shrink-0">
-                                  PROD
-                                </div>
-                              )}
-                              <div className="truncate">
-                                <div className="font-bold text-[#1d2327] truncate flex items-center gap-2">
-                                  <span>{item.product_name}</span>
-                                  {item.stock_quantity > 0 && (
-                                    <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[9px] rounded-xs">
-                                      📦 {item.stock_quantity} in stock
-                                    </span>
-                                  )}
-                                </div>
-                                {item.sku && <div className="text-[10px] text-[#50575e] font-mono">SKU: {item.sku}</div>}
-                              </div>
-                            </div>
-                            <div className="text-right shrink-0 ml-2">
-                              <div className="font-bold text-[#00a32a] font-mono">${(item.price || 0).toFixed(2)}</div>
-                              <div className="text-[9px] text-[#2271b1] font-bold">Auto-Pick Image</div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <LinkIcon className="w-3.5 h-3.5 text-[#2271b1]" />
-                        <span>Product URL</span>
-                      </span>
-                      {fetchingUrlImage && (
-                        <span className="text-[10px] text-[#2271b1] font-bold flex items-center gap-1">
-                          <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Fetching image...
-                        </span>
-                      )}
-                      {!fetchingUrlImage && urlFetchStatus && (
-                        <span className="text-[10px] text-emerald-700 font-bold max-w-[140px] truncate" title={urlFetchStatus}>
-                          {urlFetchStatus}
-                        </span>
-                      )}
-                    </label>
-                    <div className="relative flex items-center">
-                      <input
-                        type="url"
-                        placeholder="e.g. https://amazon.com/dp/... or image URL"
-                        value={orderForm.product_url || ''}
-                        onChange={(e) => handleProductUrlChange(e.target.value)}
-                        onBlur={() => {
-                          if (orderForm.product_url && !orderForm.product_image) {
-                            fetchImageFromUrl(orderForm.product_url);
-                          }
-                        }}
-                        className="w-full bg-white border border-[#8c8f94] p-2 pr-16 text-xs text-[#2271b1] font-semibold outline-none focus:border-[#2271b1]"
-                      />
-                      <div className="absolute right-1 flex items-center gap-1">
-                        {orderForm.product_url && (
-                          <a
-                            href={orderForm.product_url.startsWith('http') ? orderForm.product_url : `https://${orderForm.product_url}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1 text-[#50575e] hover:text-[#2271b1] hover:bg-[#f0f0f1] rounded-xs"
-                            title="Open URL in new tab"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => fetchImageFromUrl(orderForm.product_url)}
-                          disabled={fetchingUrlImage || !orderForm.product_url}
-                          className="px-1.5 py-0.5 bg-[#f0f0f1] hover:bg-[#2271b1] hover:text-white text-[#2271b1] text-[10px] font-bold rounded-xs transition-colors flex items-center gap-1 border border-[#c3c4c7]"
-                          title="Auto-fetch Product Image from URL"
-                        >
-                          <RefreshCw className={`w-2.5 h-2.5 ${fetchingUrlImage ? 'animate-spin' : ''}`} />
-                          <span>Fetch</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Qty *</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={orderForm.qty}
-                      onChange={(e) => setOrderForm({ ...orderForm, qty: parseInt(e.target.value) || 1 })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Selling Price ($) *</label>
-                    <input
-                      type="number"
-                      step="any"
-                      placeholder="0.00"
-                      value={orderForm.price_usd === 0 ? '' : orderForm.price_usd}
-                      onChange={(e) => setOrderForm({ ...orderForm, price_usd: e.target.value === '' ? '' : (e.target.value as any) })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-emerald-700 outline-none focus:border-[#2271b1]"
-                      required
-                    />
-                  </div>
-
-                  {/* Product Image Display Preview */}
-                  <div>
-                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#2271b1]" />
-                        <span>Product Image</span>
-                      </span>
-                      {orderForm.product_image ? (
-                        <span className="text-[10px] text-[#00a32a] font-bold">Image Attached</span>
-                      ) : fetchingUrlImage ? (
-                        <span className="text-[10px] text-[#2271b1] font-bold animate-pulse">Loading image...</span>
-                      ) : null}
-                    </label>
-                    <div className="h-9 bg-white border border-[#8c8f94] p-1 px-2.5 flex items-center justify-between rounded-xs">
-                      {fetchingUrlImage ? (
-                        <div className="flex items-center gap-2 text-xs text-[#2271b1]">
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span className="font-semibold">Auto-loading image from URL...</span>
-                        </div>
-                      ) : orderForm.product_image ? (
-                        <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={getImageUrl(orderForm.product_image)}
-                            alt="Product Preview"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none';
-                            }}
-                            className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                          />
-                          <span className="text-[11px] font-semibold text-[#1d2327] truncate">
-                            {orderForm.product_name || 'Product Image Preview'}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-[#8c8f94] italic">No image auto-loaded (add URL above)</span>
-                      )}
-                      {orderForm.product_image && !fetchingUrlImage && (
-                        <div className="flex items-center gap-1">
-                          <a
-                            href={getImageUrl(orderForm.product_image)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[#2271b1] hover:text-[#135e96] p-0.5 rounded-xs"
-                            title="Open full image in new tab"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => setOrderForm(prev => ({ ...prev, product_image: '' }))}
-                            className="text-[#d63638] hover:text-red-800 p-0.5 rounded-xs"
-                            title="Remove Image"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
+                    <div>
+                      <label className="block font-bold text-[#1d2327] mb-1">Order Status *</label>
+                      <select
+                        value={orderForm.order_status}
+                        onChange={(e) => setOrderForm(prev => ({ ...prev, order_status: e.target.value }))}
+                        className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1]"
+                        required
+                      >
+                        <option value="ADBH">ADBH</option>
+                        <option value="RBS">RBS</option>
+                        <option value="Direct Selling">Direct Selling</option>
+                      </select>
                     </div>
                   </div>
                 </div>
-
-                {/* Drag & Drop Product Image Upload Container */}
-                <div className="pt-2 border-t border-[#c3c4c7]">
-                  <label className="block text-[11px] font-bold text-[#50575e] mb-1">
-                    Product Image Upload (PNG, JPG, WEBP)
-                  </label>
-                  <div
-                    onDragOver={(e) => { e.preventDefault(); setIsDraggingImage(true); }}
-                    onDragLeave={() => setIsDraggingImage(false)}
-                    onDrop={handleImageDrop}
-                    className={`relative border-2 border-dashed rounded-sm p-3 bg-white text-center cursor-pointer transition-all ${isDraggingImage ? 'border-[#2271b1] bg-[#2271b1]/5' : 'border-[#8c8f94] hover:border-[#2271b1]'
-                      }`}
-                  >
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageFileSelect}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className="flex items-center justify-center gap-2 text-xs">
-                      <Upload className="w-4 h-4 text-[#2271b1]" />
-                      {uploadingImage ? (
-                        <span className="font-bold text-[#2271b1]">Uploading product image...</span>
-                      ) : orderForm.product_image ? (
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-[#00a32a]">Image Attached & Saved</span>
-                          <span className="text-[10px] text-[#50575e] font-mono truncate max-w-[240px]">
-                            ({orderForm.product_image.substring(0, 35)}...)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="font-bold text-[#2c3338]">Drag & drop product image file here, or click to browse</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-[#c3c4c7]">
-                  <label className="block font-bold text-[#1d2327] mb-1">
-                    Order Status *
-                  </label>
-                  <select
-                    value={orderForm.order_status || 'ADBH'}
-                    onChange={(e) => setOrderForm({ ...orderForm, order_status: e.target.value })}
-                    className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
-                    required
-                  >
-                    {ORDER_STATUS_OPTIONS.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
               </div>
 
-              {/* CONSIGNEE SHIPPING ADDRESS */}
               <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-4">
                 <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider border-b border-[#c3c4c7] pb-2">
                   Consignee Shipping Address
@@ -2446,40 +2823,7 @@ export default function OrdersPage() {
                       </div>
                     </div>
 
-                    {/* Row 2: GST / Non GST & Bank */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                          <Receipt className="w-3.5 h-3.5 text-blue-600" />
-                          <span>GST / Non GST *</span>
-                        </label>
-                        <select
-                          value={purchaseForm.gst_type}
-                          onChange={(e) => setPurchaseForm({ ...purchaseForm, gst_type: e.target.value })}
-                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                          required
-                        >
-                          <option value="GST">GST</option>
-                          <option value="Non GST">Non GST</option>
-                        </select>
-                      </div>
 
-                      <div>
-                        <label className="block font-bold text-[#1d2327] mb-1 flex items-center gap-1">
-                          <Landmark className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Bank / Payment Mode *</span>
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. HDFC Bank, ICICI, SBI, Bank Transfer"
-                          value={purchaseForm.bank}
-                          onChange={(e) => setPurchaseForm({ ...purchaseForm, bank: e.target.value })}
-                          className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs"
-                          required
-                        >
-                        </input>
-                      </div>
-                    </div>
 
                     {/* Row 3: Purchase Amount & Purchase Partner */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

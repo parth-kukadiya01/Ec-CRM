@@ -21,6 +21,7 @@ class Order(Base):
     product_name = Column(String(255), nullable=False)
     product_url = Column(String(500), nullable=True)
     product_image = Column(Text, nullable=True)
+    product_items = Column(Text, nullable=True)
     qty = Column(Integer, nullable=False, default=1)
     product_price = Column(Float, nullable=True, default=0.0)
     order_status = Column(String(100), nullable=True, default="ADBH")

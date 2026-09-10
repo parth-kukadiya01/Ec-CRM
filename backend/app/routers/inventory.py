@@ -69,8 +69,37 @@ def create_inventory_item(
             )
         partner_name = f"{partner.full_name or partner.email} ({partner.account_name or 'Store'})"
 
+    clean_name = item_in.product_name.strip() if item_in.product_name else ""
+    from sqlalchemy import func
+    existing = db.query(Inventory).filter(
+        func.lower(func.trim(Inventory.product_name)) == clean_name.lower()
+    ).first()
+
+    if existing:
+        # Prevent duplicate product in database: update existing item with provided values
+        if item_in.price is not None:
+            existing.price = item_in.price
+        if item_in.stock_quantity is not None:
+            existing.stock_quantity = existing.stock_quantity + item_in.stock_quantity
+        if item_in.sku:
+            existing.sku = item_in.sku
+        if item_in.category:
+            existing.category = item_in.category
+        if item_in.other_details:
+            existing.other_details = item_in.other_details
+        if item_in.image_url:
+            existing.image_url = item_in.image_url
+        if item_in.product_url:
+            existing.product_url = item_in.product_url
+        if item_in.partner_id:
+            existing.partner_id = item_in.partner_id
+            existing.partner_name = partner_name
+        db.commit()
+        db.refresh(existing)
+        return existing
+
     item = Inventory(
-        product_name=item_in.product_name,
+        product_name=clean_name,
         price=item_in.price,
         stock_quantity=item_in.stock_quantity,
         sku=item_in.sku,
@@ -78,7 +107,8 @@ def create_inventory_item(
         other_details=item_in.other_details,
         partner_id=item_in.partner_id,
         partner_name=partner_name,
-        image_url=item_in.image_url
+        image_url=item_in.image_url,
+        product_url=item_in.product_url
     )
     db.add(item)
     db.commit()
@@ -113,6 +143,8 @@ def update_inventory_item(
         item.other_details = item_in.other_details
     if item_in.image_url is not None:
         item.image_url = item_in.image_url
+    if item_in.product_url is not None:
+        item.product_url = item_in.product_url
 
     if item_in.partner_id is not None:
         if item_in.partner_id == 0 or item_in.partner_id is None:

@@ -327,7 +327,7 @@ export default function ShipmentsPage() {
     try {
       await ordersApi.update(orderId, { status: newStatus });
       const matchingPur = purchases.find((p: any) => p.order_id === orderId);
-      if (matchingPur && (newStatus === 'Ready to Ship' || newStatus === 'Ready for Shipment' || newStatus === 'In Stock')) {
+      if (matchingPur && (newStatus === 'Ready to Ship' || newStatus === 'In Stock')) {
         await purchasesApi.update(matchingPur.id, { status: 'Received' });
         setPurchases(prev => prev.map(p => p.id === matchingPur.id ? { ...p, status: 'Received' } : p));
       }
@@ -670,7 +670,7 @@ export default function ShipmentsPage() {
         </button>
       </div>
 
-      {/* TAB 1: Orders Ready for Shipment */}
+      {/* TAB 1: Orders Ready to Ship */}
       {activeTab === 'ready' && (
         <div className="bg-white border border-[#c3c4c7] shadow-xs rounded-sm overflow-hidden">
           {loading ? (
@@ -945,6 +945,7 @@ export default function ShipmentsPage() {
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Vol. Wt (kg)</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Cost Breakdown</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Total Cost (₹)</th>
+                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap">Forwarding / Tracking Number</th>
                       <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Status</th>
                       <th className="py-2.5 px-3 text-right">Actions</th>
                     </tr>
@@ -1088,6 +1089,26 @@ export default function ShipmentsPage() {
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">
                             ₹{(ship.shipment_cost || 0).toFixed(2)}
                           </td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono">
+                            {(() => {
+                              const fwd = ship.forwarding_number || matchingOrder?.label_tracking_id;
+                              const trk = ship.awb_number || ship.tracking_id;
+                              if (fwd && trk && fwd !== trk) {
+                                return (
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-bold text-[#1d2327] text-xs" title="Forwarding Number">{fwd}</span>
+                                    <span className="text-[10px] text-[#2271b1] font-semibold" title="AWB / Tracking Number">{trk}</span>
+                                  </div>
+                                );
+                              }
+                              const val = fwd || trk;
+                              return val ? (
+                                <span className="font-bold text-[#1d2327] text-xs">{val}</span>
+                              ) : (
+                                <span className="text-[#8c8f94]">—</span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
                             <select
                               value={ship.status || 'In Transit'}
@@ -1100,7 +1121,6 @@ export default function ShipmentsPage() {
                                 }`}
                             >
                               <option value="In Transit" className="bg-white text-blue-900 font-bold">In Transit</option>
-                              <option value="Ready for Shipment" className="bg-white text-emerald-900 font-bold">Ready for Shipment</option>
                               <option value="Shipped" className="bg-white text-blue-900 font-bold">Shipped</option>
                               <option value="Delivered" className="bg-white text-purple-900 font-bold">Delivered</option>
                             </select>

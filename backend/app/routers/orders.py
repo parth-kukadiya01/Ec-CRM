@@ -132,21 +132,40 @@ def get_or_create_inventory_item(
     product_name: str,
     price_usd: float = 0.0,
     seller_account: Optional[str] = None,
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None,
+    product_url: Optional[str] = None
 ) -> Inventory:
     clean_name = product_name.strip() if product_name else ""
     if not clean_name:
         return None
 
-    # Strict case-insensitive & trimmed search to prevent ANY duplicate product entries in database
+    norm_name = re.sub(r'\s+', ' ', clean_name).strip()
+
+    # Strict case-insensitive, normalized & trimmed search to prevent ANY duplicate product entries in database
     item = db.query(Inventory).filter(
-        func.lower(func.trim(Inventory.product_name)) == clean_name.lower()
+        or_(
+            func.lower(func.trim(Inventory.product_name)) == clean_name.lower(),
+            func.lower(func.trim(Inventory.product_name)) == norm_name.lower(),
+            Inventory.product_name.ilike(clean_name),
+            Inventory.product_name.ilike(norm_name)
+        )
     ).first()
 
     if item:
-        # If product already exists in database, update image_url if provided & missing
+        # Product already exists in database: do NOT create duplicate
+        changed = False
         if image_url and (not item.image_url or "unsplash" in item.image_url):
             item.image_url = image_url
+            changed = True
+        if product_url and product_url.strip():
+            clean_url = product_url.strip()
+            if not item.product_url or item.product_url.strip() != clean_url:
+                item.product_url = clean_url
+                changed = True
+        if price_usd and (not item.price or item.price == 0):
+            item.price = price_usd
+            changed = True
+        if changed:
             db.commit()
             db.refresh(item)
         return item
@@ -166,7 +185,8 @@ def get_or_create_inventory_item(
         sku=sku_candidate,
         category="General",
         partner_name=seller_account or "General",
-        image_url=image_url or "https://images.unsplash.com/photo-1544816155-12df9643f363?w=300"
+        image_url=image_url or "https://images.unsplash.com/photo-1544816155-12df9643f363?w=300",
+        product_url=product_url.strip() if product_url else None
     )
     db.add(item)
     db.commit()
@@ -191,8 +211,36 @@ def create_order(
             product_name=order_in.product_name,
             price_usd=order_in.price_usd or 0.0,
             seller_account=order_in.seller_account or order_in.company,
-            image_url=order_in.product_image
+            image_url=order_in.product_image,
+            product_url=order_in.product_url
         )
+    elif inventory_item:
+        # Sync product_url and image_url to inventory_item if user provided them
+        changed = False
+        if order_in.product_url and order_in.product_url.strip():
+            clean_url = order_in.product_url.strip()
+            if not inventory_item.product_url or inventory_item.product_url.strip() != clean_url:
+                inventory_item.product_url = clean_url
+                changed = True
+        if order_in.product_image and not inventory_item.image_url:
+            inventory_item.image_url = order_in.product_image
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(inventory_item)
+
+    # Determine effective product_url: fallback to inventory_item URL if blank
+    raw_url = (order_in.product_url or "").strip()
+    effective_product_url = raw_url if raw_url else (inventory_item.product_url if inventory_item else None)
+
+    effective_product_image = order_in.product_image or (inventory_item.image_url if inventory_item else None)
+    if not effective_product_image and effective_product_url:
+        extracted = extract_product_info_from_url(effective_product_url)
+        if extracted.get("image_url"):
+            effective_product_image = extracted["image_url"]
+            if inventory_item and not inventory_item.image_url:
+                inventory_item.image_url = effective_product_image
+                db.commit()
 
     account_id = order_in.account_id
     account_name = order_in.account_name
@@ -245,8 +293,9 @@ def create_order(
         seller_account=order_in.seller_account,
         product_id=inventory_item.id if inventory_item else None,
         product_name=order_in.product_name,
-        product_url=order_in.product_url,
-        product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None) or (extract_product_info_from_url(order_in.product_url).get("image_url") if order_in.product_url else None),
+        product_url=effective_product_url,
+        product_image=effective_product_image,
+        product_items=order_in.product_items,
         qty=order_in.qty,
         product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
         order_status=order_in.order_status or "ADBH",
@@ -662,14 +711,15 @@ async def upload_orders_csv(
         seller_acc = get_val("seller_account", acc_name or "")
         company = get_val("company", "ADBH")
         shipment_num = get_val("shipment_id") or get_next_shipment_id(db, offset=len(imported_orders))
-        product_image = get_val("product_image")
+        product_url = get_val("product_url")
 
         inventory_item = get_or_create_inventory_item(
             db=db,
             product_name=product_name,
             price_usd=price_usd,
             seller_account=seller_acc or company,
-            image_url=product_image
+            image_url=product_image,
+            product_url=product_url
         )
 
         order = Order(
@@ -682,7 +732,7 @@ async def upload_orders_csv(
             seller_account=seller_acc,
             product_id=inventory_item.id if inventory_item else None,
             product_name=product_name,
-            product_url=get_val("product_url"),
+            product_url=product_url or (inventory_item.product_url if inventory_item else None),
             product_image=product_image or (inventory_item.image_url if inventory_item else None),
             qty=qty,
             product_price=price_usd,
@@ -726,9 +776,23 @@ def create_bulk_orders(
     db: Session = Depends(get_db),
     current_user: User = Depends(check_permission("orders:write"))
 ):
+    allowed_comps = get_user_allowed_companies(current_user)
+    if allowed_comps:
+        for o_chk in orders_in:
+            comp_val = (o_chk.company or "").strip().lower()
+            if comp_val and not any(c.lower() in comp_val for c in allowed_comps):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Not authorized to create orders for company '{o_chk.company}'. Allowed: {', '.join(allowed_comps)}"
+                )
+
     created_orders = []
     acc_id = current_user.account_id if not current_user.is_admin else None
     acc_name = current_user.account_name if not current_user.is_admin else None
+
+    # Determine a base shipment id if none provided across batch
+    common_shipment_num = None
+    first_shipment = orders_in[0].shipment_id if orders_in else None
 
     for idx, order_in in enumerate(orders_in):
         inventory_item = None
@@ -740,11 +804,34 @@ def create_bulk_orders(
                 product_name=order_in.product_name,
                 price_usd=order_in.price_usd or 0.0,
                 seller_account=order_in.seller_account or order_in.company,
-                image_url=order_in.product_image
+                image_url=order_in.product_image,
+                product_url=order_in.product_url
             )
+        elif inventory_item and order_in.product_url and order_in.product_url.strip():
+            if not inventory_item.product_url:
+                inventory_item.product_url = order_in.product_url.strip()
+                db.commit()
+
+        effective_product_url = (order_in.product_url or "").strip() or (inventory_item.product_url if inventory_item else None)
+        effective_product_image = order_in.product_image or (inventory_item.image_url if inventory_item else None)
+        if not effective_product_image and effective_product_url:
+            extracted = extract_product_info_from_url(effective_product_url)
+            if extracted.get("image_url"):
+                effective_product_image = extracted["image_url"]
+                if inventory_item and not inventory_item.image_url:
+                    inventory_item.image_url = effective_product_image
+                    db.commit()
 
         order_num = order_in.order_number or f"114-{random.randint(1000000, 9999999)}-{random.randint(1000000, 9999999)}"
-        shipment_num = order_in.shipment_id or get_next_shipment_id(db, offset=idx)
+        shipment_num = order_in.shipment_id or first_shipment or get_next_shipment_id(db, offset=idx)
+
+        item_acc_id = acc_id or order_in.account_id
+        item_acc_name = acc_name or order_in.account_name
+        if not item_acc_id and order_in.seller_account:
+            acc = db.query(Account).filter(Account.account_name.ilike(order_in.seller_account.strip())).first()
+            if acc:
+                item_acc_id = acc.id
+                item_acc_name = acc.account_name
 
         order = Order(
             order_number=order_num,
@@ -756,8 +843,8 @@ def create_bulk_orders(
             seller_account=order_in.seller_account or "",
             product_id=inventory_item.id if inventory_item else None,
             product_name=order_in.product_name or f"Item #{idx + 1}",
-            product_url=order_in.product_url,
-            product_image=order_in.product_image or (inventory_item.image_url if inventory_item else None),
+            product_url=effective_product_url,
+            product_image=effective_product_image,
             qty=order_in.qty or 1,
             product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
             order_status=order_in.order_status or "ADBH",
@@ -771,8 +858,8 @@ def create_bulk_orders(
             zip_code=order_in.zip_code or "",
             mobile_number=order_in.mobile_number or "",
             country=order_in.country or "USA",
-            account_id=acc_id or order_in.account_id,
-            account_name=acc_name or order_in.account_name,
+            account_id=item_acc_id,
+            account_name=item_acc_name,
             status=order_in.status or "Pending",
             delivery_service=order_in.delivery_service,
             shipment_cost=order_in.shipment_cost or 0.0
@@ -860,6 +947,27 @@ def update_order(
         if acc:
             order.account_id = acc.id
             order.account_name = acc.account_name
+
+    # Ensure product_id is linked if missing
+    if not order.product_id and order.product_name:
+        inv = db.query(Inventory).filter(
+            func.lower(func.trim(Inventory.product_name)) == order.product_name.strip().lower()
+        ).first()
+        if inv:
+            order.product_id = inv.id
+
+    # Sync product_url with inventory
+    if order_in.product_url and order_in.product_url.strip():
+        clean_url = order_in.product_url.strip()
+        order.product_url = clean_url
+        if order.product_id:
+            inv = db.query(Inventory).filter(Inventory.id == order.product_id).first()
+            if inv and (not inv.product_url or inv.product_url != clean_url):
+                inv.product_url = clean_url
+    elif (not order.product_url or not order.product_url.strip()) and order.product_id:
+        inv = db.query(Inventory).filter(Inventory.id == order.product_id).first()
+        if inv and inv.product_url:
+            order.product_url = inv.product_url
 
     if order_in.status is not None and order_in.status == "Ready to Ship" and old_status != "Ready to Ship":
         inv = None

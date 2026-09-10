@@ -86,7 +86,7 @@ export default function Navbar() {
         });
       });
 
-      const readyOrders = (ordRes.data || []).filter((o: any) => o.status === 'Ready for Shipment' || o.status === 'Shipped');
+      const readyOrders = (ordRes.data || []).filter((o: any) => o.status === 'Ready to Ship' || o.status === 'Shipped');
       readyOrders.forEach((ord: any) => {
         items.push({
           id: `ord-ship-${ord.id}`,
