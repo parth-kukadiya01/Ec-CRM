@@ -342,51 +342,222 @@ def create_order(
 import csv
 import io
 import re
-from fastapi import UploadFile, File
-
-# ─────────────────────────────────────────────────────────────
-# Label PDF Upload Endpoint
-# ─────────────────────────────────────────────────────────────
 import uuid as uuid_module
+from PIL import Image
+from fastapi import UploadFile, File
 from app.core.s3 import is_s3_enabled, upload_file_to_s3
+from app.models.shipment import Shipment
 
-def extract_tracking_id_from_pdf(content: bytes) -> Optional[str]:
-    """
-    Best-effort extraction of tracking/barcode number from PDF text.
-    Looks for common carrier tracking patterns.
-    """
+
+def clean_tracking_id(raw_str: str) -> Optional[str]:
+    """Sanitizes and validates tracking numbers from barcodes or text."""
+    if not raw_str:
+        return None
+    raw = str(raw_str).strip()
+    
+    # Check GS1 pattern with parenthesized Application Identifiers:
+    # e.g. (420)61244(92)34690363072206692393 or (420) 61244 (94) 0010...
+    m_gs1_parens = re.search(r'\(420\)\s*\d{5}\s*\((9[1-5]|\d{2})\)\s*(\d{18,24})', raw)
+    if m_gs1_parens:
+        return m_gs1_parens.group(1) + m_gs1_parens.group(2)
+        
+    # Check general parens GS1 e.g. (92)34690363072206692393
+    m_usps_parens = re.search(r'\((9[1-5]|\d{2})\)\s*(\d{18,24})', raw)
+    if m_usps_parens:
+        return m_usps_parens.group(1) + m_usps_parens.group(2)
+
+    # Remove symbology identifiers like ]C1, ]d2, ]e0 and non-alphanumeric chars
+    cleaned = re.sub(r'^\][a-zA-Z0-9]{2}', '', raw)
+    cleaned = re.sub(r'[\s\-_()\[\]{}:;,\x1d\x1e\x04]+', '', cleaned)
+    
+    # 1. GS1-128 barcode format: 420 + 5-digit zip + 20-24 digit USPS tracking
+    # e.g. 420612449234690363072206692393
+    m_gs1 = re.match(r'^.*?420\d{5}(9[1-5]\d{18,22}|\d{20,24})$', cleaned)
+    if m_gs1:
+        return m_gs1.group(1)
+    
+    # 2. USPS 20-24 digit tracking (often starts with 91, 92, 93, 94, 95, etc.)
+    m_usps = re.match(r'^(9[1-5]\d{18,22}|\d{20,24})$', cleaned)
+    if m_usps:
+        return m_usps.group(1)
+    
+    # 3. UPS tracking: 1Z + 16 alphanumeric characters
+    m_ups = re.match(r'^(1Z[A-Z0-9]{16})$', cleaned, re.I)
+    if m_ups:
+        return m_ups.group(1).upper()
+        
+    # 4. FedEx tracking: 12, 14, 15, 20, 22 digits
+    m_fedex = re.match(r'^(\d{12}|\d{14}|\d{15}|\d{20}|\d{22})$', cleaned)
+    if m_fedex:
+        return m_fedex.group(1)
+        
+    # 5. DHL: 10-11 digits or JD...
+    m_dhl = re.match(r'^(JD\d{18}|\d{10,11})$', cleaned, re.I)
+    if m_dhl:
+        return m_dhl.group(1)
+        
+    # 6. Amazon TBA
+    m_amz = re.match(r'^(TBA\d{12})$', cleaned, re.I)
+    if m_amz:
+        return m_amz.group(1).upper()
+
+    # 7. Generic alphanumeric tracking (e.g. 10 to 34 chars)
+    if len(cleaned) >= 10 and re.match(r'^[A-Z0-9]{10,34}$', cleaned, re.I):
+        return cleaned
+
+    return None
+
+
+def extract_tracking_from_text(text: str) -> Optional[str]:
+    """Extracts tracking number from raw OCR/PDF text using carrier patterns."""
+    if not text:
+        return None
+        
+    # 1. USPS Tracking Header pattern (e.g. USPS TRACKING # USPS Ship \n 9234 6903 6307 2206 6923 93)
+    m = re.search(r'USPS\s+TRACKING\s*#?[^\n\r]*[\r\n]+\s*([0-9\s]{20,35})', text, re.I)
+    if m:
+        val = clean_tracking_id(m.group(1))
+        if val:
+            return val
+            
+    # 2. UPS Tracking pattern
+    m = re.search(r'\b(1Z\s*[A-Z0-9\s]{16,22})\b', text, re.I)
+    if m:
+        val = clean_tracking_id(m.group(1))
+        if val:
+            return val
+
+    # 3. GS1 format with 420 zip prefix in text
+    m = re.search(r'\b(420\d{5}[\s\-]*(?:9[1-5][\d\s\-]{18,28}|\d[\d\s\-]{19,30}))\b', text)
+    if m:
+        val = clean_tracking_id(m.group(1))
+        if val:
+            return val
+
+    # 4. Spaced 20-24 digit numbers (e.g. 9234 6903 6307 2206 6923 93)
+    matches = re.findall(r'\b((?:9[1-5]\d{2}|\d{4})[\s\-]+(?:\d{4}[\s\-]+){3,4}\d{2,6})\b', text)
+    for match in matches:
+        val = clean_tracking_id(match)
+        if val:
+            return val
+
+    # 5. Continuous 20-24 digit tracking (USPS / FedEx)
+    matches = re.findall(r'\b(9[1-5]\d{18,22}|\d{20,24})\b', text)
+    for match in matches:
+        val = clean_tracking_id(match)
+        if val:
+            return val
+
+    # 6. FedEx 12-digit grouped (e.g. 7834 1234 5678)
+    matches = re.findall(r'\b(\d{4}[\s\-]+\d{4}[\s\-]+\d{4})\b', text)
+    for match in matches:
+        val = clean_tracking_id(match)
+        if val:
+            return val
+
+    # 7. Amazon TBA
+    matches = re.findall(r'\b(TBA\d{12})\b', text, re.I)
+    if matches:
+        return matches[0].upper()
+
+    return None
+
+
+def extract_tracking_from_barcode_image(img_pil: Image.Image) -> Optional[str]:
+    """Scans an image with zxing-cpp to read 1D and 2D barcodes, supporting rotations."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(content))
-        full_text = ""
-        for page in reader.pages:
-            try:
-                full_text += page.extract_text() or ""
-            except Exception:
-                pass
+        import zxingcpp
+        
+        # Ensure image is in standard RGB or grayscale mode for zxing-cpp
+        img = img_pil
+        if img.mode not in ('RGB', 'L', 'RGBA'):
+            img = img.convert('RGB')
 
-        # Common carrier tracking patterns
-        patterns = [
-            # UPS (1Z...)
-            r'\b(1Z[A-Z0-9]{16})\b',
-            # FedEx (12–22 digits)
-            r'\b([0-9]{12,22})\b',
-            # USPS (20–22 digits)
-            r'\b([0-9]{20,22})\b',
-            # DHL (10+ digits or JD...)
-            r'\b(JD[0-9]{18})\b',
-            # Generic alphanumeric tracking
-            r'\b([A-Z]{2,4}[0-9]{8,18}[A-Z]{0,2})\b',
-        ]
+        results = zxingcpp.read_barcodes(img)
+        for r in results:
+            if r.text:
+                cleaned = clean_tracking_id(r.text)
+                if cleaned:
+                    return cleaned
 
-        for pattern in patterns:
-            matches = re.findall(pattern, full_text)
-            if matches:
-                # Return the longest match (most likely to be a full tracking ID)
-                return max(matches, key=len)
+        # Try 90, 180, 270 rotations if not detected in default orientation
+        for angle in [90, 180, 270]:
+            rot_img = img.rotate(angle, expand=True)
+            results = zxingcpp.read_barcodes(rot_img)
+            for r in results:
+                if r.text:
+                    cleaned = clean_tracking_id(r.text)
+                    if cleaned:
+                        return cleaned
     except Exception:
         pass
     return None
+
+
+def extract_tracking_id(content: bytes, filename: str = "") -> Optional[str]:
+    """
+    Comprehensive extraction of tracking/forwarding number from PDF or image content.
+    Combines text parsing and barcode scanning.
+    """
+    fn = (filename or "").lower()
+    is_pdf = fn.endswith(".pdf") or content[:4] == b"%PDF"
+
+    if is_pdf:
+        # 1. Try PDF text layer
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            full_text = ""
+            for page in reader.pages:
+                try:
+                    full_text += (page.extract_text() or "") + "\n"
+                except Exception:
+                    pass
+            
+            trk = extract_tracking_from_text(full_text)
+            if trk:
+                return trk
+                
+            # 2. Try embedded barcode images in PDF pages
+            for page in reader.pages:
+                if hasattr(page, 'images'):
+                    for img_file in page.images:
+                        try:
+                            pil_img = Image.open(io.BytesIO(img_file.data))
+                            trk = extract_tracking_from_barcode_image(pil_img)
+                            if trk:
+                                return trk
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    else:
+        # Try image barcode scan
+        try:
+            pil_img = Image.open(io.BytesIO(content))
+            trk = extract_tracking_from_barcode_image(pil_img)
+            if trk:
+                return trk
+        except Exception:
+            pass
+
+    return None
+
+
+def convert_image_to_pdf_bytes(img_bytes: bytes) -> bytes:
+    """Converts image bytes into a single-page PDF with matching dimensions."""
+    try:
+        from reportlab.pdfgen import canvas
+        pil_img = Image.open(io.BytesIO(img_bytes))
+        w, h = pil_img.size
+        
+        pdf_buf = io.BytesIO()
+        c = canvas.Canvas(pdf_buf, pagesize=(w, h))
+        c.drawInlineImage(pil_img, 0, 0, width=w, height=h)
+        c.save()
+        return pdf_buf.getvalue()
+    except Exception:
+        return img_bytes
 
 
 @router.post("/{order_id}/upload-label")
@@ -403,28 +574,44 @@ async def upload_order_label(
         raise HTTPException(status_code=404, detail="Order not found")
 
     content = await file.read()
+    orig_name = file.filename or "label.pdf"
+    fn_lower = orig_name.lower()
+    is_image = fn_lower.endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff'))
+
+    # Extract tracking / forwarding number from PDF or Image
+    extracted_tracking_id = extract_tracking_id(content, orig_name)
+
+    # Convert image to PDF if uploaded as image so viewing & stamping is always a consistent PDF
+    upload_content = content
+    upload_filename = orig_name
+    upload_content_type = file.content_type or "application/pdf"
+
+    if is_image:
+        try:
+            pdf_bytes = convert_image_to_pdf_bytes(content)
+            if pdf_bytes and pdf_bytes[:4] == b"%PDF":
+                upload_content = pdf_bytes
+                upload_filename = os.path.splitext(orig_name)[0] + ".pdf"
+                upload_content_type = "application/pdf"
+        except Exception:
+            pass
 
     # Upload the file (S3 or local)
     if is_s3_enabled():
         file_url, _, _ = upload_file_to_s3(
-            file_content=content,
-            original_filename=file.filename or "label.pdf",
-            content_type=file.content_type or "application/pdf",
+            file_content=upload_content,
+            original_filename=upload_filename,
+            content_type=upload_content_type,
         )
     else:
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
         os.makedirs(UPLOADS_DIR, exist_ok=True)
-        unique_name = f"{uuid_module.uuid4().hex[:12]}_{(file.filename or 'label.pdf').replace(' ', '_')}"
+        unique_name = f"{uuid_module.uuid4().hex[:12]}_{upload_filename.replace(' ', '_')}"
         file_path = os.path.join(UPLOADS_DIR, unique_name)
         with open(file_path, "wb") as buf:
-            buf.write(content)
+            buf.write(upload_content)
         file_url = f"/uploads/{unique_name}"
-
-    # Extract tracking ID from PDF (best-effort)
-    extracted_tracking_id = None
-    if file.filename and file.filename.lower().endswith(".pdf"):
-        extracted_tracking_id = extract_tracking_id_from_pdf(content)
 
     # Update the order
     order.label_pdf_url = file_url
@@ -432,8 +619,11 @@ async def upload_order_label(
     order.label_free = label_free
     if extracted_tracking_id:
         order.label_tracking_id = extracted_tracking_id
-        # Replace the shipment_id (Forwarded ID) with the extracted tracking ID
-        order.shipment_id = extracted_tracking_id
+        
+        # Auto-update forwarding_number in any existing shipment for this order
+        shipments = db.query(Shipment).filter(Shipment.order_id == order.id).all()
+        for s in shipments:
+            s.forwarding_number = extracted_tracking_id
 
     db.commit()
     db.refresh(order)
@@ -448,51 +638,69 @@ async def upload_order_label(
 
 
 def stamp_product_name_on_pdf(pdf_bytes: bytes, product_name: str, order_num: str = "", qty: int = 1) -> bytes:
-    """Stamps product name and order info at the bottom (last) of the PDF label."""
+    """
+    Stamps product name and order info at the bottom of the PDF label.
+    Maintains exact original page dimensions (e.g. 4x6 inches) and scales original content
+    proportionately so no part of the shipping label (top or bottom) is ever clipped or cut.
+    """
     try:
-        from pypdf import PdfReader, PdfWriter
+        from pypdf import PdfReader, PdfWriter, Transformation
         from reportlab.pdfgen import canvas
         from reportlab.lib.colors import HexColor
-        import io
+
+        # Fallback: if not valid PDF bytes (e.g. legacy image upload), convert first
+        if pdf_bytes[:4] != b"%PDF":
+            pdf_bytes = convert_image_to_pdf_bytes(pdf_bytes)
 
         reader = PdfReader(io.BytesIO(pdf_bytes))
         writer = PdfWriter()
+
+        footer_height = 20  # pt for product name footer
 
         for page in reader.pages:
             width = float(page.mediabox.width)
             height = float(page.mediabox.height)
 
-            packet = io.BytesIO()
-            can = canvas.Canvas(packet, pagesize=(width, height))
+            # Scale factor so entire label fits perfectly above footer without altering page size
+            scale = max(0.85, (height - footer_height) / height)
 
-            # Bottom banner
-            banner_height = 28
-            can.setFillColor(HexColor("#FFFFFF"))
-            can.rect(0, 0, width, banner_height, fill=1, stroke=0)
+            # Create background canvas with EXACT same page dimensions
+            bg_buf = io.BytesIO()
+            bg_can = canvas.Canvas(bg_buf, pagesize=(width, height))
 
-            # Divider line at the top of banner
-            can.setStrokeColor(HexColor("#2271b1"))
-            can.setLineWidth(1)
-            can.line(0, banner_height, width, banner_height)
+            # Draw clean bottom footer
+            bg_can.setFillColor(HexColor("#FFFFFF"))
+            bg_can.rect(0, 0, width, footer_height, fill=1, stroke=0)
+
+            # Divider line at the top of footer
+            bg_can.setStrokeColor(HexColor("#CBD5E1"))
+            bg_can.setLineWidth(0.75)
+            bg_can.line(0, footer_height, width, footer_height)
 
             # Product details text
-            can.setFont("Helvetica-Bold", 11)
-            can.setFillColor(HexColor("#1d2327"))
+            bg_can.setFont("Helvetica-Bold", 8)
+            bg_can.setFillColor(HexColor("#0F172A"))
+            
             text_str = f"Item: {product_name}"
             if qty and qty > 1:
-                text_str += f" (Qty: {qty})"
+                text_str += f"  (Qty: {qty})"
             if order_num:
                 text_str = f"Order #{order_num}  |  {text_str}"
 
-            can.drawString(15, 9, text_str[:120])
-            can.save()
+            # Left aligned text inside footer
+            bg_can.drawString(8, 6, text_str[:100])
+            bg_can.save()
 
-            packet.seek(0)
-            overlay_pdf = PdfReader(packet)
-            overlay_page = overlay_pdf.pages[0]
+            bg_buf.seek(0)
+            bg_reader = PdfReader(bg_buf)
+            new_page = bg_reader.pages[0]
 
-            page.merge_page(overlay_page)
-            writer.add_page(page)
+            # Scale original page and shift it above the footer
+            x_offset = width * (1.0 - scale) / 2.0
+            page.add_transformation(Transformation().scale(scale, scale).translate(x_offset, footer_height))
+            new_page.merge_page(page)
+
+            writer.add_page(new_page)
 
         output = io.BytesIO()
         writer.write(output)
@@ -547,7 +755,6 @@ def download_order_label(
         qty=order.qty or 1
     )
 
-    import re
     clean_product = re.sub(r'[^a-zA-Z0-9_\-\. ]', '_', product_name)[:50].strip()
     tracking_part = order.label_tracking_id or order.shipment_id or order.order_number or f"Order-{order.id}"
     download_filename = f"{tracking_part} - {clean_product}.pdf"

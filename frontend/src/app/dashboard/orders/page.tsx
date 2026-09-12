@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
+import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
 import {
   ShoppingCart,
   Plus,
@@ -38,11 +39,103 @@ import {
   UserCheck,
   FileText,
   StickyNote,
-  Tag
+  Tag,
+  Settings2
 } from 'lucide-react';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
 const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta'];
+
+const ORDER_TABLE_COLUMNS: ColumnDefinition[] = [
+  { key: 'no', label: 'No.', locked: true },
+  { key: 'order_process_date', label: 'Order Process Date' },
+  { key: 'shipping_date', label: 'Shipping Date' },
+  { key: 'last_delivery_date', label: 'Last Delivery Date' },
+  { key: 'arriving_date', label: 'Arriving Date' },
+  { key: 'company', label: 'Company / Person' },
+  { key: 'shipment_id', label: 'Shipment ID' },
+  { key: 'order_number', label: 'Order ID' },
+  { key: 'seller_account', label: 'Seller Account' },
+  { key: 'product_name', label: 'Product Name' },
+  { key: 'qty', label: 'Qty' },
+  { key: 'price_usd', label: 'Price ($)' },
+  { key: 'order_status', label: 'Order Status' },
+  { key: 'purchase_action', label: 'Purchase Action' },
+  { key: 'consignee_name', label: 'Consignee Name' },
+  { key: 'shipment_address_1', label: 'Address Line 1' },
+  { key: 'shipment_address_2', label: 'Address Line 2' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'zip_code', label: 'Zip Code' },
+  { key: 'mobile_number', label: 'Contact Number' },
+  { key: 'country', label: 'Country' },
+  { key: 'label', label: 'Label PDF' },
+  { key: 'actions', label: 'Actions', locked: true },
+];
+
+const ORDER_COLUMN_PRESETS: ColumnPreset[] = [
+  {
+    id: 'default',
+    label: 'Default View',
+    columnKeys: [
+      'no',
+      'order_process_date',
+      'last_delivery_date',
+      'company',
+      'order_number',
+      'seller_account',
+      'product_name',
+      'qty',
+      'price_usd',
+      'order_status',
+      'purchase_action',
+      'label',
+      'actions',
+    ],
+  },
+  {
+    id: 'logistics',
+    label: 'Logistics',
+    columnKeys: [
+      'no',
+      'order_process_date',
+      'shipping_date',
+      'last_delivery_date',
+      'arriving_date',
+      'shipment_id',
+      'order_number',
+      'product_name',
+      'consignee_name',
+      'shipment_address_1',
+      'city',
+      'state',
+      'zip_code',
+      'mobile_number',
+      'label',
+      'actions',
+    ],
+  },
+  {
+    id: 'finance',
+    label: 'Finance',
+    columnKeys: [
+      'no',
+      'order_process_date',
+      'company',
+      'order_number',
+      'seller_account',
+      'product_name',
+      'qty',
+      'price_usd',
+      'order_status',
+      'purchase_action',
+      'label',
+      'actions',
+    ],
+  },
+];
+
+const DEFAULT_VISIBLE_ORDER_KEYS = ORDER_COLUMN_PRESETS[0].columnKeys;
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -54,6 +147,19 @@ export default function OrdersPage() {
   const [inventoryList, setInventoryList] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Column Visibility State with local storage persistence
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('crm_orders_column_visibility');
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    const initial: Record<string, boolean> = {};
+    DEFAULT_VISIBLE_ORDER_KEYS.forEach(k => { initial[k] = true; });
+    return initial;
+  });
 
   // Filters
   const [selectedCompany, setSelectedCompany] = useState<string>('All');
@@ -68,7 +174,6 @@ export default function OrdersPage() {
   // Pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
-
 
   // Alerts for CSV Upload
   const [uploadingCsv, setUploadingCsv] = useState(false);
@@ -1320,7 +1425,6 @@ export default function OrdersPage() {
         label_cost_usd: labelCostInput,
         label_free: labelFreeInput,
         label_tracking_id: data.tracking_id_extracted || o.label_tracking_id,
-        shipment_id: data.tracking_id_extracted || o.shipment_id,
       } : o));
       if (!data.tracking_id_extracted) {
         setLabelUploadError('Label saved. No tracking ID could be extracted from this PDF.');
@@ -1388,32 +1492,41 @@ export default function OrdersPage() {
             Full enterprise sales ledger & order tracking
           </p>
         </div>
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingCsv}
-              className="px-3.5 py-1.5 bg-white border border-[#c3c4c7] hover:bg-[#f0f0f1] text-[#2c3338] text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
-            >
-              <Upload className="w-4 h-4 text-[#2271b1]" />
-              <span>{uploadingCsv ? 'Importing...' : 'Upload CSV'}</span>
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleCsvFileChange}
-              accept=".csv"
-              className="hidden"
-            />
-            <button
-              onClick={openAddModalHandler}
-              className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Order</span>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <ColumnVisibilityDropdown
+            columns={ORDER_TABLE_COLUMNS}
+            visibleColumns={visibleColumns}
+            onChange={setVisibleColumns}
+            presets={ORDER_COLUMN_PRESETS}
+            storageKey="crm_orders_column_visibility"
+          />
+          {canEdit && (
+            <>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingCsv}
+                className="px-3.5 py-1.5 bg-white border border-[#c3c4c7] hover:bg-[#f0f0f1] text-[#2c3338] text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
+              >
+                <Upload className="w-4 h-4 text-[#2271b1]" />
+                <span>{uploadingCsv ? 'Importing...' : 'Upload CSV'}</span>
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleCsvFileChange}
+                accept=".csv"
+                className="hidden"
+              />
+              <button
+                onClick={openAddModalHandler}
+                className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Order</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* CSV Alert Notifications */}
@@ -1679,30 +1792,32 @@ export default function OrdersPage() {
               <ResizableTable className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center w-12">No.</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order Process Date</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arriving Date</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[110px]">Company / Person</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px] max-w-[240px]">Product Name</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Price ($)</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Order Status</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[210px]">Purchase Action</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 1</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 2</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>
-                    <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[140px]">Label</th>
-                    <th className="py-2.5 px-3 text-center sticky right-0 bg-[#f0f0f1] border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-20">Actions</th>
+                    {visibleColumns.no !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center w-12">No.</th>}
+                    {visibleColumns.order_process_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order Process Date</th>}
+                    {visibleColumns.shipping_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
+                    {visibleColumns.last_delivery_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
+                    {visibleColumns.arriving_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arriving Date</th>}
+                    {visibleColumns.company !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[110px]">Company / Person</th>}
+                    {visibleColumns.shipment_id !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>}
+                    {visibleColumns.order_number !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
+                    {visibleColumns.seller_account !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>}
+                    {visibleColumns.product_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px] max-w-[240px]">Product Name</th>}
+                    {visibleColumns.qty !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
+                    {visibleColumns.price_usd !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Price ($)</th>}
+                    {visibleColumns.order_status !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Order Status</th>}
+                    {visibleColumns.purchase_action !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[210px]">Purchase Action</th>}
+                    {visibleColumns.consignee_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
+                    {visibleColumns.shipment_address_1 !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 1</th>}
+                    {visibleColumns.shipment_address_2 !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 2</th>}
+                    {visibleColumns.city !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
+                    {visibleColumns.state !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
+                    {visibleColumns.zip_code !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
+                    {visibleColumns.mobile_number !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
+                    {visibleColumns.country !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
+                    {visibleColumns.label !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[140px]">Label</th>}
+                    {visibleColumns.actions !== false && (
+                      <th className="py-2.5 px-3 text-center sticky right-0 bg-[#f0f0f1] border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-20">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#dcdcde] text-[#2c3338]">
@@ -1725,224 +1840,238 @@ export default function OrdersPage() {
 
                     return (
                       <tr key={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#50575e]">
-                          {(currentPage - 1) * pageSize + index + 1}
-                        </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.order_process_date || ord.order_date || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.shipping_date || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.last_delivery_date || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{arriveDate}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
-                          <span className={`inline-flex items-center justify-center px-2.5 py-0.5 min-w-[70px] text-[11px] font-bold rounded-xs border ${companyBadgeStyle}`}>
-                            {ord.company || 'ADBH'}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">{ord.order_number}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium max-w-[150px] truncate">{ord.seller_account || ''}</td>
+                        {visibleColumns.no !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#50575e]">
+                            {(currentPage - 1) * pageSize + index + 1}
+                          </td>
+                        )}
+                        {visibleColumns.order_process_date !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.order_process_date || ord.order_date || '—'}</td>}
+                        {visibleColumns.shipping_date !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.shipping_date || '—'}</td>}
+                        {visibleColumns.last_delivery_date !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.last_delivery_date || '—'}</td>}
+                        {visibleColumns.arriving_date !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{arriveDate}</td>}
+                        {visibleColumns.company !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
+                            <span className={`inline-flex items-center justify-center px-2.5 py-0.5 min-w-[70px] text-[11px] font-bold rounded-xs border ${companyBadgeStyle}`}>
+                              {ord.company || 'ADBH'}
+                            </span>
+                          </td>
+                        )}
+                        {visibleColumns.shipment_id !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>}
+                        {visibleColumns.order_number !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">{ord.order_number}</td>}
+                        {visibleColumns.seller_account !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium max-w-[150px] truncate">{ord.seller_account || ''}</td>}
                         {/* Product Name (handles single & multi-product cleanly) */}
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327] min-w-[200px] max-w-[260px]">
-                          {(() => {
-                            let items: any[] = [];
-                            try {
-                              if (ord.product_items) {
-                                const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
-                                if (Array.isArray(parsed) && parsed.length > 0) items = parsed;
-                              }
-                            } catch (e) {}
+                        {visibleColumns.product_name !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327] min-w-[200px] max-w-[260px]">
+                            {(() => {
+                              let items: any[] = [];
+                              try {
+                                if (ord.product_items) {
+                                  const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+                                  if (Array.isArray(parsed) && parsed.length > 0) items = parsed;
+                                }
+                              } catch (e) {}
 
-                            if (items.length > 1) {
-                              return (
-                                <div className="flex flex-col gap-1.5 py-1">
-                                  {items.map((item: any, i: number) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                      {item.product_image ? (
-                                        /* eslint-disable-next-line @next/next/no-img-element */
-                                        <img
-                                          src={getImageUrl(item.product_image)}
-                                          alt=""
-                                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                          className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                                        />
-                                      ) : (
-                                        <div className="w-5 h-5 rounded-xs bg-[#f0f0f1] border border-[#c3c4c7] flex items-center justify-center text-[9px] font-bold text-[#50575e] shrink-0">
-                                          P{i + 1}
-                                        </div>
-                                      )}
-                                      <div className="min-w-0 flex-1">
-                                        {item.product_url ? (
-                                          <a
-                                            href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-[170px]"
-                                            title={item.product_name}
-                                          >
-                                            <span className="truncate">{item.product_name}</span>
-                                            <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
-                                          </a>
+                              if (items.length > 1) {
+                                return (
+                                  <div className="flex flex-col gap-1.5 py-1">
+                                    {items.map((item: any, i: number) => (
+                                      <div key={i} className="flex items-center gap-2">
+                                        {item.product_image ? (
+                                          /* eslint-disable-next-line @next/next/no-img-element */
+                                          <img
+                                            src={getImageUrl(item.product_image)}
+                                            alt=""
+                                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                            className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                          />
                                         ) : (
-                                          <span className="font-semibold text-xs truncate block max-w-[170px]" title={item.product_name}>
-                                            {item.product_name}
-                                          </span>
+                                          <div className="w-5 h-5 rounded-xs bg-[#f0f0f1] border border-[#c3c4c7] flex items-center justify-center text-[9px] font-bold text-[#50575e] shrink-0">
+                                            P{i + 1}
+                                          </div>
                                         )}
+                                        <div className="min-w-0 flex-1">
+                                          {item.product_url ? (
+                                            <a
+                                              href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-[170px]"
+                                              title={item.product_name}
+                                            >
+                                              <span className="truncate">{item.product_name}</span>
+                                              <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
+                                            </a>
+                                          ) : (
+                                            <span className="font-semibold text-xs truncate block max-w-[170px]" title={item.product_name}>
+                                              {item.product_name}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span className="inline-flex items-center px-1.5 py-0.2 bg-[#2271b1]/10 text-[#2271b1] text-[10px] font-extrabold rounded-xs border border-[#2271b1]/20 shrink-0">
+                                          ×{item.qty || 1}
+                                        </span>
                                       </div>
-                                      <span className="inline-flex items-center px-1.5 py-0.2 bg-[#2271b1]/10 text-[#2271b1] text-[10px] font-extrabold rounded-xs border border-[#2271b1]/20 shrink-0">
-                                        ×{item.qty || 1}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              );
-                            }
+                                    ))}
+                                  </div>
+                                );
+                              }
 
-                            return (
-                              <div className="flex items-center gap-2">
-                                {ord.product_image && (
-                                  /* eslint-disable-next-line @next/next/no-img-element */
-                                  <img
-                                    src={getImageUrl(ord.product_image)}
-                                    alt=""
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).style.display = 'none';
-                                    }}
-                                    className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                                  />
-                                )}
-                                {ord.product_url ? (
-                                  <a
-                                    href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
-                                  >
-                                    <span className="truncate">{ord.product_name}</span>
-                                    <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
-                                  </a>
-                                ) : (
-                                  <span className="truncate max-w-[200px]" title={ord.product_name}>{ord.product_name}</span>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">${(ord.price_usd || ord.product_price || 0).toFixed(2)}</td>
-                        <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
-                          {(() => {
-                            const cur = (ord.order_status || 'ADBH').trim();
-                            const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
-                            const s = matchedStatus.toLowerCase();
-                            const colorClass =
-                              (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
-                                s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
-                                  s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
-                                    s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
-                                      'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
-                            return (
-                              <select
-                                value={matchedStatus}
-                                onChange={(e) => handleStatusChange(ord.id, e.target.value)}
-                                className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
-                              >
-                                {ORDER_STATUS_OPTIONS.map((status) => (
-                                  <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
-                                    {status}
-                                  </option>
-                                ))}
-                              </select>
-                            );
-                          })()}
-                        </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
-                          {(() => {
-                            const isStockDone = Boolean(
-                              matchingPur && (
-                                matchingPur.is_in_stock ||
-                                matchingPur.notes?.includes('In-Stock') ||
-                                matchingPur.purchase_partner_name === 'In Stock' ||
-                                matchingPur.bank === 'In Stock'
-                              )
-                            );
-                            const isPurchaseDone = Boolean(matchingPur && !isStockDone);
-                            const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
-                            if (isStockDone) {
                               return (
-                                <div className="flex flex-col items-center justify-center gap-0.5">
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-xs">
-                                      <Truck className="w-3 h-3 text-emerald-700" />
-                                      <span>In Stock</span>
-                                    </span>
-                                    <button onClick={() => openPurchaseModal(ord, true)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit In-Stock Entry">
-                                      <Edit2 className="w-3 h-3" />
-                                    </button>
-                                  </div>
-                                  {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
+                                <div className="flex items-center gap-2">
+                                  {ord.product_image && (
+                                    /* eslint-disable-next-line @next/next/no-img-element */
+                                    <img
+                                      src={getImageUrl(ord.product_image)}
+                                      alt=""
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                      className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                    />
+                                  )}
+                                  {ord.product_url ? (
+                                    <a
+                                      href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
+                                    >
+                                      <span className="truncate">{ord.product_name}</span>
+                                      <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
+                                    </a>
+                                  ) : (
+                                    <span className="truncate max-w-[200px]" title={ord.product_name}>{ord.product_name}</span>
+                                  )}
                                 </div>
                               );
-                            }
-                            if (isPurchaseDone) {
+                            })()}
+                          </td>
+                        )}
+                        {visibleColumns.qty !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>}
+                        {visibleColumns.price_usd !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">${(ord.price_usd || ord.product_price || 0).toFixed(2)}</td>}
+                        {visibleColumns.order_status !== false && (
+                          <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
+                            {(() => {
+                              const cur = (ord.order_status || 'ADBH').trim();
+                              const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
+                              const s = matchedStatus.toLowerCase();
+                              const colorClass =
+                                (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
+                                  s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
+                                    s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
+                                      s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
+                                        'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
                               return (
-                                <div className="flex flex-col items-center justify-center gap-0.5">
+                                <select
+                                  value={matchedStatus}
+                                  onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                                  className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
+                                >
+                                  {ORDER_STATUS_OPTIONS.map((status) => (
+                                    <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
+                                      {status}
+                                    </option>
+                                  ))}
+                                </select>
+                              );
+                            })()}
+                          </td>
+                        )}
+                        {visibleColumns.purchase_action !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
+                            {(() => {
+                              const isStockDone = Boolean(
+                                matchingPur && (
+                                  matchingPur.is_in_stock ||
+                                  matchingPur.notes?.includes('In-Stock') ||
+                                  matchingPur.purchase_partner_name === 'In Stock' ||
+                                  matchingPur.bank === 'In Stock'
+                                )
+                              );
+                              const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+                              const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
+                              if (isStockDone) {
+                                return (
+                                  <div className="flex flex-col items-center justify-center gap-0.5">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-xs">
+                                        <Truck className="w-3 h-3 text-emerald-700" />
+                                        <span>In Stock</span>
+                                      </span>
+                                      <button onClick={() => openPurchaseModal(ord, true)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit In-Stock Entry">
+                                        <Edit2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
+                                  </div>
+                                );
+                              }
+                              if (isPurchaseDone) {
+                                return (
+                                  <div className="flex flex-col items-center justify-center gap-0.5">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-blue-100 text-blue-900 border border-blue-300 shadow-xs">
+                                        <CheckCircle2 className="w-3 h-3 text-blue-700" />
+                                        <span>Purchased</span>
+                                      </span>
+                                      <button onClick={() => openPurchaseModal(ord, false)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Purchase Entry">
+                                        <Edit2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
+                                  </div>
+                                );
+                              }
+                              const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
+                              return (
+                                <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
                                   <div className="flex items-center justify-center gap-1.5">
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-blue-100 text-blue-900 border border-blue-300 shadow-xs">
-                                      <CheckCircle2 className="w-3 h-3 text-blue-700" />
-                                      <span>Purchased</span>
-                                    </span>
-                                    <button onClick={() => openPurchaseModal(ord, false)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Purchase Entry">
-                                      <Edit2 className="w-3 h-3" />
+                                    <button onClick={() => handleMarkInStock(ord)} className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Item is already in stock">
+                                      <Truck className="w-3 h-3" /><span>In Stock</span>
+                                    </button>
+                                    <button onClick={() => openPurchaseModal(ord)} className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Create purchase order entry">
+                                      <Plus className="w-3 h-3" /><span>Purchase Entry</span>
                                     </button>
                                   </div>
-                                  {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
+                                  {dueInfo && (
+                                    <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue ? 'bg-red-100 text-red-900 border-red-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`} title={`Purchase Due Date: ${dueInfo.formatted}`}>
+                                      <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
+                                      <span>Due: {dueInfo.formatted}{dueInfo.isOverdue ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)` : ' (Due Today!)'}</span>
+                                    </span>
+                                  )}
                                 </div>
                               );
-                            }
-                            const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
-                            return (
-                              <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
-                                <div className="flex items-center justify-center gap-1.5">
-                                  <button onClick={() => handleMarkInStock(ord)} className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Item is already in stock">
-                                    <Truck className="w-3 h-3" /><span>In Stock</span>
-                                  </button>
-                                  <button onClick={() => openPurchaseModal(ord)} className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Create purchase order entry">
-                                    <Plus className="w-3 h-3" /><span>Purchase Entry</span>
-                                  </button>
-                                </div>
-                                {dueInfo && (
-                                  <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue ? 'bg-red-100 text-red-900 border-red-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`} title={`Purchase Due Date: ${dueInfo.formatted}`}>
-                                    <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
-                                    <span>Due: {dueInfo.formatted}{dueInfo.isOverdue ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)` : ' (Due Today!)'}</span>
-                                  </span>
-                                )}
+                            })()}
+                          </td>
+                        )}
+                        {visibleColumns.consignee_name !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.consignee_name}>{ord.consignee_name || ord.buyer_name || '—'}</td>}
+                        {visibleColumns.shipment_address_1 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] max-w-[180px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>}
+                        {visibleColumns.shipment_address_2 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate">{ord.shipment_address_2 || '—'}</td>}
+                        {visibleColumns.city !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.city || '—'}</td>}
+                        {visibleColumns.state !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] uppercase font-bold text-[#50575e] text-center">{ord.state || '—'}</td>}
+                        {visibleColumns.zip_code !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-center">{ord.zip_code || '—'}</td>}
+                        {visibleColumns.mobile_number !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] text-center">{ord.mobile_number || '—'}</td>}
+                        {visibleColumns.country !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold uppercase text-center">{ord.country || 'USA'}</td>}
+                        {visibleColumns.label !== false && (
+                          <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
+                            {ord.label_pdf_url ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <a href={`/backend-api/orders/${ord.id}/download-label?download=1`} target="_blank" rel="noopener noreferrer" download={`${ord.label_tracking_id || ord.order_number || 'label'} - ${ord.product_name}.pdf`} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-300 rounded-xs text-[11px] font-bold hover:bg-indigo-200 transition-colors shadow-2xs" title="Download Label PDF">
+                                  <FileText className="w-3 h-3" /><span>Label</span>
+                                </a>
+                                {canEdit && (<button onClick={() => openLabelModal(ord)} className="p-1 text-[#2271b1] hover:text-[#135e96] hover:bg-[#f0f0f1] rounded-xs transition-colors" title="Update label PDF & cost"><Edit2 className="w-3 h-3" /></button>)}
                               </div>
-                            );
-                          })()}
-                        </td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.consignee_name}>{ord.consignee_name || ord.buyer_name || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] max-w-[180px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate">{ord.shipment_address_2 || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.city || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] uppercase font-bold text-[#50575e] text-center">{ord.state || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-center">{ord.zip_code || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] text-center">{ord.mobile_number || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold uppercase text-center">{ord.country || 'USA'}</td>
-                        <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
-                          {ord.label_pdf_url ? (
+                            ) : (canEdit ? (<button onClick={() => openLabelModal(ord)} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-dashed border-[#8c8f94] hover:border-[#2271b1] hover:bg-[#e8f3fc] text-[#50575e] hover:text-[#2271b1] rounded-xs text-[11px] font-semibold transition-all" title="Upload label PDF"><Tag className="w-3 h-3" /><span>Label</span></button>) : (<span className="text-[#a7aaad] text-[11px]">—</span>))}
+                          </td>
+                        )}
+                        {visibleColumns.actions !== false && (
+                          <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'}`}>
                             <div className="flex items-center justify-center gap-1.5">
-                              <a href={`/backend-api/orders/${ord.id}/download-label?download=1`} target="_blank" rel="noopener noreferrer" download={`${ord.label_tracking_id || ord.order_number || 'label'} - ${ord.product_name}.pdf`} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-300 rounded-xs text-[11px] font-bold hover:bg-indigo-200 transition-colors shadow-2xs" title="Download Label PDF">
-                                <FileText className="w-3 h-3" /><span>Label</span>
-                              </a>
-                              {canEdit && (<button onClick={() => openLabelModal(ord)} className="p-1 text-[#2271b1] hover:text-[#135e96] hover:bg-[#f0f0f1] rounded-xs transition-colors" title="Update label PDF & cost"><Edit2 className="w-3 h-3" /></button>)}
+                              <button onClick={() => openEditModal(ord)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Order"><Edit2 className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => handleDeleteOrder(ord.id)} className="p-1 hover:bg-red-600 hover:text-white text-red-600 rounded-xs transition-colors" title="Delete Order"><Trash2 className="w-3.5 h-3.5" /></button>
                             </div>
-                          ) : (canEdit ? (<button onClick={() => openLabelModal(ord)} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-dashed border-[#8c8f94] hover:border-[#2271b1] hover:bg-[#e8f3fc] text-[#50575e] hover:text-[#2271b1] rounded-xs text-[11px] font-semibold transition-all" title="Upload label PDF"><Tag className="w-3 h-3" /><span>Label</span></button>) : (<span className="text-[#a7aaad] text-[11px]">—</span>))}
-                        </td>
-                        <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'}`}>
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button onClick={() => openEditModal(ord)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Order"><Edit2 className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => handleDeleteOrder(ord.id)} className="p-1 hover:bg-red-600 hover:text-white text-red-600 rounded-xs transition-colors" title="Delete Order"><Trash2 className="w-3.5 h-3.5" /></button>
-                          </div>
-                        </td>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -2979,10 +3108,10 @@ export default function OrdersPage() {
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              {/* Upload PDF */}
+              {/* Upload PDF / Image Label */}
               <div>
                 <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-1.5">
-                  Upload Label PDF
+                  Upload Label (PDF or Image)
                 </label>
                 <div
                   className="border-2 border-dashed border-[#c3c4c7] rounded-sm p-4 text-center hover:border-[#2271b1] transition-colors cursor-pointer"
@@ -2991,26 +3120,26 @@ export default function OrdersPage() {
                   {labelUploading ? (
                     <div className="flex items-center justify-center gap-2 text-[#2271b1]">
                       <div className="w-4 h-4 border-2 border-[#2271b1] border-t-transparent rounded-full animate-spin" />
-                      <span className="font-semibold">Uploading & extracting tracking ID...</span>
+                      <span className="font-semibold">Uploading & extracting tracking/forwarding number...</span>
                     </div>
                   ) : selectedOrderForLabel.label_pdf_url ? (
                     <div className="flex flex-col items-center gap-1">
                       <FileText className="w-6 h-6 text-indigo-500" />
                       <span className="text-[#2271b1] font-bold text-[11px]">Label uploaded ✓</span>
-                      <span className="text-[#50575e] text-[10px]">Click to replace with new PDF</span>
+                      <span className="text-[#50575e] text-[10px]">Click to replace with new PDF/Image</span>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-1 text-[#50575e]">
                       <Upload className="w-6 h-6 text-[#a7aaad]" />
-                      <span className="font-semibold">Click to upload label PDF</span>
-                      <span className="text-[10px]">PDF files only • Tracking ID will be auto-extracted</span>
+                      <span className="font-semibold">Click to upload shipping label</span>
+                      <span className="text-[10px]">PDF, PNG, JPG • Forwarding / Tracking # auto-extracted</span>
                     </div>
                   )}
                 </div>
                 <input
                   ref={labelFileInputRef}
                   type="file"
-                  accept=".pdf,application/pdf"
+                  accept=".pdf,application/pdf,image/png,image/jpeg,image/jpg,image/webp"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
@@ -3024,7 +3153,7 @@ export default function OrdersPage() {
                 <div className="bg-indigo-50 border border-indigo-200 rounded-sm p-3">
                   <div className="text-[10px] font-bold text-indigo-700 uppercase mb-1 flex items-center gap-1">
                     <Barcode className="w-3.5 h-3.5" />
-                    Extracted Tracking ID (set as Shipment ID)
+                    Extracted Forwarding Number
                   </div>
                   <div className="font-mono font-bold text-indigo-900 text-[13px] break-all">{labelExtractedId}</div>
                 </div>

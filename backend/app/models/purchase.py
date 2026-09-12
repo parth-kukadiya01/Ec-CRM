@@ -23,8 +23,6 @@ class Purchase(Base):
     qty = Column(Integer, nullable=False, default=1)
     
     sku = Column(String(100), nullable=True)
-    gst_type = Column(String(50), nullable=True, default="GST")
-    bank = Column(String(150), nullable=True)
     po_number = Column(String(100), nullable=True)
 
     # Status: "Pending", "Purchased", "Received"

@@ -1,10 +1,174 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { shipmentsApi, ordersApi, authApi, purchasesApi, getImageUrl } from '@/lib/api';
-import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2, Download } from 'lucide-react';
+import { shipmentsApi, ordersApi, authApi, purchasesApi, companiesApi, accountsApi, partnersMgmtApi, inventoryApi, getImageUrl } from '@/lib/api';
+import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2, Download, Filter, Tag, Settings2 } from 'lucide-react';
 import ResizableTable from '@/components/ResizableTable';
+import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
+
+const READY_TABLE_COLUMNS: ColumnDefinition[] = [
+  { key: 'order_process_date', label: 'Process Date' },
+  { key: 'shipping_date', label: 'Shipping Date' },
+  { key: 'last_delivery_date', label: 'Last Delivery Date' },
+  { key: 'arriving_date', label: 'Arrive Date' },
+  { key: 'order_number', label: 'Order ID' },
+  { key: 'po_number', label: 'PO' },
+  { key: 'shipment_id', label: 'Shipment No' },
+  { key: 'company', label: 'Company' },
+  { key: 'seller_account', label: 'Partner / Seller' },
+  { key: 'product_name', label: 'Product Name' },
+  { key: 'qty', label: 'Qty' },
+  { key: 'consignee_name', label: 'Consignee Name' },
+  { key: 'shipment_address_1', label: 'Address Line 1' },
+  { key: 'shipment_address_2', label: 'Address Line 2' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'zip_code', label: 'Zip Code' },
+  { key: 'mobile_number', label: 'Contact Number' },
+  { key: 'country', label: 'Country' },
+  { key: 'status', label: 'Status' },
+  { key: 'actions', label: 'Actions', locked: true },
+];
+
+const READY_COLUMN_PRESETS: ColumnPreset[] = [
+  {
+    id: 'default',
+    label: 'Default View',
+    columnKeys: [
+      'order_process_date',
+      'last_delivery_date',
+      'order_number',
+      'po_number',
+      'company',
+      'product_name',
+      'qty',
+      'consignee_name',
+      'city',
+      'state',
+      'status',
+      'actions',
+    ],
+  },
+  {
+    id: 'logistics',
+    label: 'Logistics View',
+    columnKeys: [
+      'order_process_date',
+      'shipping_date',
+      'last_delivery_date',
+      'arriving_date',
+      'order_number',
+      'shipment_id',
+      'product_name',
+      'consignee_name',
+      'shipment_address_1',
+      'city',
+      'state',
+      'zip_code',
+      'mobile_number',
+      'status',
+      'actions',
+    ],
+  },
+];
+
+const DEFAULT_VISIBLE_READY_KEYS = READY_COLUMN_PRESETS[0].columnKeys;
+
+const DISPATCHED_TABLE_COLUMNS: ColumnDefinition[] = [
+  { key: 'carrier_partner', label: 'Carrier Partner' },
+  { key: 'awb_tracking', label: 'AWB / Tracking' },
+  { key: 'forwarding_number', label: 'Forwarding #' },
+  { key: 'shipping_date', label: 'Shipping Date' },
+  { key: 'last_delivery_date', label: 'Last Delivery Date' },
+  { key: 'arriving_date', label: 'Arrive Date' },
+  { key: 'order_number', label: 'Order ID' },
+  { key: 'po_number', label: 'PO' },
+  { key: 'shipment_id', label: 'Shipment No' },
+  { key: 'product_name', label: 'Product Name' },
+  { key: 'qty', label: 'Qty' },
+  { key: 'consignee_name', label: 'Consignee Name' },
+  { key: 'shipment_address_1', label: 'Address Line 1' },
+  { key: 'shipment_address_2', label: 'Address Line 2' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'zip_code', label: 'Zip Code' },
+  { key: 'mobile_number', label: 'Contact Number' },
+  { key: 'country', label: 'Country' },
+  { key: 'weight', label: 'Weight (kg/oz)' },
+  { key: 'dimensions', label: 'Dimensions' },
+  { key: 'vol_wt', label: 'Vol. Wt' },
+  { key: 'cost_breakdown', label: 'Cost Breakdown' },
+  { key: 'total_cost', label: 'Total Cost (₹)' },
+  { key: 'forwarding_id', label: 'Forwarding ID' },
+  { key: 'status', label: 'Status' },
+  { key: 'actions', label: 'Actions', locked: true },
+];
+
+const DISPATCHED_COLUMN_PRESETS: ColumnPreset[] = [
+  {
+    id: 'default',
+    label: 'Default View',
+    columnKeys: [
+      'carrier_partner',
+      'awb_tracking',
+      'order_number',
+      'product_name',
+      'qty',
+      'consignee_name',
+      'city',
+      'weight',
+      'total_cost',
+      'forwarding_id',
+      'status',
+      'actions',
+    ],
+  },
+  {
+    id: 'logistics',
+    label: 'Logistics View',
+    columnKeys: [
+      'carrier_partner',
+      'awb_tracking',
+      'shipping_date',
+      'last_delivery_date',
+      'order_number',
+      'product_name',
+      'consignee_name',
+      'shipment_address_1',
+      'city',
+      'state',
+      'zip_code',
+      'mobile_number',
+      'weight',
+      'dimensions',
+      'vol_wt',
+      'forwarding_id',
+      'status',
+      'actions',
+    ],
+  },
+  {
+    id: 'costs',
+    label: 'Cost View',
+    columnKeys: [
+      'carrier_partner',
+      'awb_tracking',
+      'order_number',
+      'po_number',
+      'product_name',
+      'qty',
+      'weight',
+      'cost_breakdown',
+      'total_cost',
+      'forwarding_id',
+      'status',
+      'actions',
+    ],
+  },
+];
+
+const DEFAULT_VISIBLE_DISPATCHED_KEYS = DISPATCHED_COLUMN_PRESETS[0].columnKeys;
 
 export default function ShipmentsPage() {
   const [activeTab, setActiveTab] = useState<'ready' | 'dispatched'>('ready');
@@ -13,13 +177,78 @@ export default function ShipmentsPage() {
   const [shipments, setShipments] = useState<any[]>([]);
   const [purchases, setPurchases] = useState<any[]>([]);
   const [allOrdersList, setAllOrdersList] = useState<any[]>([]);
+  const [companiesList, setCompaniesList] = useState<any[]>([]);
+  const [accountsList, setAccountsList] = useState<any[]>([]);
+  const [partnersList, setPartnersList] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Column Visibility States with local storage persistence
+  const [visibleColumnsReady, setVisibleColumnsReady] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('crm_shipments_ready_column_visibility');
+        if (saved) return JSON.parse(saved);
+      } catch (e) { }
+    }
+    const initial: Record<string, boolean> = {};
+    DEFAULT_VISIBLE_READY_KEYS.forEach(k => { initial[k] = true; });
+    return initial;
+  });
+
+  const [visibleColumnsDispatched, setVisibleColumnsDispatched] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('crm_shipments_dispatched_column_visibility');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.forwarding_id === undefined) {
+            parsed.forwarding_id = true;
+          }
+          return parsed;
+        }
+      } catch (e) { }
+    }
+    const initial: Record<string, boolean> = {};
+    DEFAULT_VISIBLE_DISPATCHED_KEYS.forEach(k => { initial[k] = true; });
+    return initial;
+  });
+
+  // Filter States
+  const [selectedCompany, setSelectedCompany] = useState<string>('All');
+  const [selectedCarrier, setSelectedCarrier] = useState<string>('All');
+  const [selectedReadyStatus, setSelectedReadyStatus] = useState<string>('All');
+  const [selectedDispatchedStatus, setSelectedDispatchedStatus] = useState<string>('All');
+  const [selectedSellerAccount, setSelectedSellerAccount] = useState<string>('All');
+  const [selectedLabelType, setSelectedLabelType] = useState<string>('All');
+  const [dateFieldType, setDateFieldType] = useState<string>('process_date');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Modals
   const [showDispatchModal, setShowDispatchModal] = useState(false);
   const [editingShipment, setEditingShipment] = useState<any>(null);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [showEditPurchaseModal, setShowEditPurchaseModal] = useState(false);
+  const [selectedOrderForPurchaseEdit, setSelectedOrderForPurchaseEdit] = useState<any>(null);
+  const [inventoryList, setInventoryList] = useState<any[]>([]);
+  const [savingPurchaseEdit, setSavingPurchaseEdit] = useState(false);
+  const [revertingPurchase, setRevertingPurchase] = useState(false);
+  const [purchaseEditForm, setPurchaseEditForm] = useState({
+    order_id: 0,
+    purchase_id: null as number | null,
+    is_in_stock: false,
+    purchase_value: 0,
+    purchase_partner_name: '',
+    po_number: '',
+    delivery_code: '',
+    estimated_shipment_date: '',
+    notes: '',
+    qty: 1,
+    product_name: '',
+  });
+
   const [shipmentForm, setShipmentForm] = useState({
     order_id: 0,
     order_number: '',
@@ -42,10 +271,6 @@ export default function ShipmentsPage() {
     shipment_cost: 0,
   });
 
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-
   // Pagination states for tabs
   const [currentPageReady, setCurrentPageReady] = useState<number>(1);
   const [currentPageDispatched, setCurrentPageDispatched] = useState<number>(1);
@@ -55,16 +280,26 @@ export default function ShipmentsPage() {
   const loadAllData = async (showSpinner = true) => {
     try {
       if (showSpinner) setLoading(true);
-      const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
-      const shipRes = await shipmentsApi.list().catch(() => ({ data: [] }));
-      const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
-      const meRes = await authApi.getMe().catch(() => ({ data: null }));
+      const [ordRes, shipRes, purRes, compRes, accRes, partRes, invRes, meRes] = await Promise.all([
+        ordersApi.list().catch(() => ({ data: [] })),
+        shipmentsApi.list().catch(() => ({ data: [] })),
+        purchasesApi.list().catch(() => ({ data: [] })),
+        companiesApi.list().catch(() => ({ data: [] })),
+        accountsApi.list().catch(() => ({ data: [] })),
+        partnersMgmtApi.list().catch(() => ({ data: [] })),
+        inventoryApi.list().catch(() => ({ data: [] })),
+        authApi.getMe().catch(() => ({ data: null }))
+      ]);
 
       const allOrders = ordRes.data || [];
       const shipList = shipRes.data || [];
       const purList = purRes.data || [];
       setPurchases(purList);
       setAllOrdersList(allOrders);
+      setCompaniesList(compRes.data || []);
+      setAccountsList(accRes.data || []);
+      setPartnersList(partRes.data || []);
+      setInventoryList(invRes.data || []);
 
       const existingShipmentOrderIds = new Set(shipList.map((s: any) => s.order_id));
       const purOrderIds = new Set(purList.map((p: any) => String(p.order_id)));
@@ -88,17 +323,32 @@ export default function ShipmentsPage() {
           order_id: o.id,
           order_number: o.order_number || `#ORD-${o.id}`,
           tracking_id: o.shipment_id || o.oi || `TRK-${o.id}`,
-          shipment_partner: o.delivery_service,
+          shipment_partner: o.delivery_service || 'RBS Online',
           product_name: o.product_name,
+          product_image: o.product_image,
           weight: 1.0,
           dimensions: '10 x 5 x 8 cm',
-          shipment_cost: 0,
+          shipment_cost: o.shipment_cost || 0,
           status: o.status,
           created_at: o.order_process_date || o.order_date || o.created_at,
           shipment_date: o.order_process_date || o.order_date || o.created_at,
+          shipping_date: o.shipping_date,
+          last_delivery_date: o.last_delivery_date,
           arriving_date: o.arriving_date,
           buyer_name: o.buyer_name,
+          consignee_name: o.consignee_name,
           company: o.company,
+          seller_account: o.seller_account || o.account_name,
+          label_free: o.label_free,
+          label_cost_usd: o.label_cost_usd || 0,
+          label_tracking_id: o.label_tracking_id,
+          mobile_number: o.mobile_number,
+          shipment_address_1: o.shipment_address_1,
+          shipment_address_2: o.shipment_address_2,
+          city: o.city,
+          state: o.state,
+          zip_code: o.zip_code,
+          country: o.country || 'USA',
         }));
 
       setReadyOrders(ready);
@@ -119,7 +369,20 @@ export default function ShipmentsPage() {
   useEffect(() => {
     setCurrentPageReady(1);
     setCurrentPageDispatched(1);
-  }, [startDate, endDate, searchQuery, pageSize]);
+  }, [
+    startDate,
+    endDate,
+    searchQuery,
+    pageSize,
+    selectedCompany,
+    selectedCarrier,
+    selectedReadyStatus,
+    selectedDispatchedStatus,
+    selectedSellerAccount,
+    selectedLabelType,
+    dateFieldType,
+    activeTab
+  ]);
 
   // Helper for Date Range checking
   const isDateInRange = (dateStr?: string) => {
@@ -128,6 +391,51 @@ export default function ShipmentsPage() {
     if (startDate && d < startDate) return false;
     if (endDate && d > endDate) return false;
     return true;
+  };
+
+  // Quick Date Preset Setter
+  const setQuickDate = (preset: 'today' | 'yesterday' | '7days' | 'month' | 'all') => {
+    const now = new Date();
+    const formatDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    if (preset === 'all') {
+      setStartDate('');
+      setEndDate('');
+      return;
+    }
+    if (preset === 'today') {
+      const todayStr = formatDate(now);
+      setStartDate(todayStr);
+      setEndDate(todayStr);
+      return;
+    }
+    if (preset === 'yesterday') {
+      const yest = new Date(now);
+      yest.setDate(yest.getDate() - 1);
+      const yestStr = formatDate(yest);
+      setStartDate(yestStr);
+      setEndDate(yestStr);
+      return;
+    }
+    if (preset === '7days') {
+      const past7 = new Date(now);
+      past7.setDate(past7.getDate() - 6);
+      setStartDate(formatDate(past7));
+      setEndDate(formatDate(now));
+      return;
+    }
+    if (preset === 'month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      setStartDate(formatDate(firstDay));
+      setEndDate(formatDate(lastDay));
+      return;
+    }
   };
 
   // Search filtering helper
@@ -152,10 +460,115 @@ export default function ShipmentsPage() {
     });
   };
 
+  // Available Companies for filter dropdown
+  const availableCompanies = Array.from(new Set([
+    ...companiesList.map((c: any) => c.company_name).filter(Boolean),
+    ...readyOrders.map((o: any) => o.company).filter(Boolean),
+    ...shipments.map((s: any) => s.company).filter(Boolean),
+    ...companyOptions
+  ])).filter(c => isAllowedCompany(c));
+
+  // Available Carriers for filter dropdown
+  const availableCarriers = Array.from(new Set([
+    'RBS Online',
+    'Shiprocket',
+    ...shipments.map((s: any) => s.shipment_partner).filter(Boolean),
+    ...readyOrders.map((o: any) => o.delivery_service).filter(Boolean)
+  ]));
+
+  // Available Seller Accounts for filter dropdown
+  const availableSellerAccounts = Array.from(new Set([
+    ...allOrdersList
+      .filter(o => isAllowedCompany(o.company) && (selectedCompany === 'All' || o.company?.toLowerCase() === selectedCompany.toLowerCase()))
+      .map(o => o.seller_account || o.account_name)
+      .filter(Boolean),
+    ...accountsList
+      .filter((a: any) => isAllowedCompany(a.company) && (selectedCompany === 'All' || a.company?.toLowerCase() === selectedCompany.toLowerCase()))
+      .map((a: any) => a.account_name)
+      .filter(Boolean)
+  ]));
+
+  // Reset All Filters
+  const resetAllFilters = () => {
+    setSelectedCompany('All');
+    setSelectedCarrier('All');
+    setSelectedReadyStatus('All');
+    setSelectedDispatchedStatus('All');
+    setSelectedSellerAccount('All');
+    setSelectedLabelType('All');
+    setDateFieldType('process_date');
+    setStartDate('');
+    setEndDate('');
+    setSearchQuery('');
+  };
+
+  const hasActiveFilters = Boolean(
+    selectedCompany !== 'All' ||
+    selectedCarrier !== 'All' ||
+    (activeTab === 'ready' ? selectedReadyStatus !== 'All' : selectedDispatchedStatus !== 'All') ||
+    selectedSellerAccount !== 'All' ||
+    selectedLabelType !== 'All' ||
+    startDate ||
+    endDate ||
+    searchQuery
+  );
+
   // Date and Search Filtered Datasets
   const dateFilteredReadyOrders = readyOrders
     .filter(o => isAllowedCompany(o.company))
-    .filter(o => isDateInRange(o.order_process_date || o.order_date || o.created_at))
+    .filter(o => {
+      if (selectedCompany !== 'All' && (o.company || '').toLowerCase() !== selectedCompany.toLowerCase()) {
+        return false;
+      }
+      return true;
+    })
+    .filter(o => {
+      if (selectedCarrier !== 'All' && (o.delivery_service || '').toLowerCase() !== selectedCarrier.toLowerCase()) {
+        return false;
+      }
+      return true;
+    })
+    .filter(o => {
+      if (selectedSellerAccount !== 'All') {
+        const pur = purchases.find((p: any) => p.order_id === o.id);
+        const seller = (o.seller_account || o.account_name || pur?.purchase_partner_name || '').toLowerCase();
+        if (seller !== selectedSellerAccount.toLowerCase()) return false;
+      }
+      return true;
+    })
+    .filter(o => {
+      if (selectedLabelType === 'free') {
+        return Boolean(o.label_free);
+      }
+      if (selectedLabelType === 'paid') {
+        return !o.label_free && Number(o.label_cost_usd) > 0;
+      }
+      return true;
+    })
+    .filter(o => {
+      const pur = purchases.find((p: any) => p.order_id === o.id);
+      const isInStock =
+        (o.order_status || '').toLowerCase() === 'in stock' ||
+        o.status === 'In Stock' ||
+        Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+
+      const isPurchaseReceived = Boolean(pur && (pur.status === 'Received' || pur.status === 'Completed'));
+      const isPurchasePending = !isInStock && !isPurchaseReceived && (o.status === 'Purchase Pending' || o.status === 'Pending' || (pur && pur.status !== 'Received'));
+      const isReadyToShip = isPurchaseReceived && !isInStock;
+
+      if (selectedReadyStatus === 'In Stock') return isInStock;
+      if (selectedReadyStatus === 'Purchase Pending') return isPurchasePending;
+      if (selectedReadyStatus === 'Ready to Ship') return isReadyToShip || (!isInStock && !isPurchasePending);
+      return true;
+    })
+    .filter(o => {
+      const pur = purchases.find((p: any) => p.order_id === o.id);
+      let targetDate = o.order_process_date || o.order_date || o.created_at;
+      if (dateFieldType === 'shipping_date') targetDate = o.shipping_date;
+      else if (dateFieldType === 'last_delivery_date') targetDate = o.last_delivery_date;
+      else if (dateFieldType === 'arriving_date') targetDate = o.arriving_date || pur?.estimated_shipment_date;
+      return isDateInRange(targetDate);
+    })
     .filter(o => {
       const pur = purchases.find((p: any) => p.order_id === o.id);
       return matchesSearch(
@@ -177,7 +590,57 @@ export default function ShipmentsPage() {
 
   const dateFilteredShipments = shipments
     .filter(s => isAllowedCompany(s.company))
-    .filter(s => isDateInRange(s.created_at || s.shipment_date))
+    .filter(s => {
+      const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
+      const comp = s.company || matchingOrder?.company || '';
+      if (selectedCompany !== 'All' && comp.toLowerCase() !== selectedCompany.toLowerCase()) {
+        return false;
+      }
+      return true;
+    })
+    .filter(s => {
+      if (selectedCarrier !== 'All' && (s.shipment_partner || '').toLowerCase() !== selectedCarrier.toLowerCase()) {
+        return false;
+      }
+      return true;
+    })
+    .filter(s => {
+      if (selectedSellerAccount !== 'All') {
+        const pur = purchases.find((p: any) => p.order_id === s.order_id);
+        const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
+        const seller = (matchingOrder?.seller_account || matchingOrder?.account_name || s.seller_account || pur?.purchase_partner_name || '').toLowerCase();
+        if (seller !== selectedSellerAccount.toLowerCase()) return false;
+      }
+      return true;
+    })
+    .filter(s => {
+      const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
+      const isFree = Boolean(s.label_free || matchingOrder?.label_free);
+      const labelCost = Number(s.label_cost_usd || matchingOrder?.label_cost_usd || 0);
+      if (selectedLabelType === 'free') {
+        return isFree;
+      }
+      if (selectedLabelType === 'paid') {
+        return !isFree && labelCost > 0;
+      }
+      return true;
+    })
+    .filter(s => {
+      if (selectedDispatchedStatus !== 'All') {
+        const st = s.status || 'In Transit';
+        if (st.toLowerCase() !== selectedDispatchedStatus.toLowerCase()) return false;
+      }
+      return true;
+    })
+    .filter(s => {
+      const pur = purchases.find((p: any) => p.order_id === s.order_id);
+      const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
+      let targetDate = s.created_at || s.shipment_date || matchingOrder?.order_process_date || matchingOrder?.order_date;
+      if (dateFieldType === 'shipping_date') targetDate = matchingOrder?.shipping_date || s.shipping_date;
+      else if (dateFieldType === 'last_delivery_date') targetDate = matchingOrder?.last_delivery_date || s.last_delivery_date;
+      else if (dateFieldType === 'arriving_date') targetDate = matchingOrder?.arriving_date || pur?.estimated_shipment_date || s.arriving_date;
+      return isDateInRange(targetDate);
+    })
     .filter(s => {
       const pur = purchases.find((p: any) => p.order_id === s.order_id);
       const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
@@ -368,6 +831,213 @@ export default function ShipmentsPage() {
       loadAllData(false);
     } finally {
       setReceivingOrderId(null);
+    }
+  };
+
+  const openEditPurchaseModal = (ord: any) => {
+    setSelectedOrderForPurchaseEdit(ord);
+    const pur = purchases.find((p: any) => p.order_id === ord.id);
+    const isInStock =
+      (ord.order_status || '').toLowerCase() === 'in stock' ||
+      ord.status === 'In Stock' ||
+      Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+
+    setPurchaseEditForm({
+      order_id: ord.id,
+      purchase_id: pur?.id || null,
+      is_in_stock: isInStock,
+      purchase_value: pur?.purchase_value ?? (ord.purchase_cost_inr || 0),
+      purchase_partner_name: (pur?.purchase_partner_name && pur.purchase_partner_name !== 'In Stock')
+        ? pur.purchase_partner_name
+        : (isInStock ? 'In Stock' : (ord.seller_account || ord.account_name || 'Vendor')),
+      po_number: pur?.po_number || '',
+      delivery_code: pur?.delivery_code || ord.oi || ord.shipment_id || '',
+      estimated_shipment_date: pur?.estimated_shipment_date || ord.arriving_date || new Date().toISOString().split('T')[0],
+      notes: (pur?.notes && !pur.notes.includes('In-Stock')) ? pur.notes : '',
+      qty: pur?.qty || ord.qty || 1,
+      product_name: ord.product_name || pur?.product_name || 'Product',
+    });
+    setShowEditPurchaseModal(true);
+  };
+
+  const handleRevertPurchase = async () => {
+    if (!selectedOrderForPurchaseEdit) return;
+    const ordId = selectedOrderForPurchaseEdit.id;
+    const purId = purchaseEditForm.purchase_id;
+
+    const confirmRevert = window.confirm(
+      `Are you sure you want to REVERT this purchase?\n\n` +
+      `• Order ${selectedOrderForPurchaseEdit.order_number || ordId} will be removed from "Ready to Ship".\n` +
+      `• Order status will be reset to "Pending".\n` +
+      `• Purchase cost will be reset to ₹0.\n` +
+      `• It will reappear in the Orders queue as Pending Purchase.`
+    );
+    if (!confirmRevert) return;
+
+    try {
+      setRevertingPurchase(true);
+      const nowIso = new Date().toISOString();
+
+      // Optimistic update
+      setReadyOrders(prev => prev.filter(o => o.id !== ordId));
+      if (purId) {
+        setPurchases(prev => prev.filter(p => p.id !== purId));
+      }
+      setAllOrdersList(prev => {
+        const target = prev.find(o => o.id === ordId);
+        const rest = prev.filter(o => o.id !== ordId);
+        if (target) {
+          const updated = {
+            ...target,
+            purchase_cost_inr: 0,
+            status: 'Pending',
+            order_status: 'Pending',
+            created_at: nowIso,
+          };
+          return [updated, ...rest];
+        }
+        return prev;
+      });
+
+      // API calls
+      if (purId) {
+        await purchasesApi.delete(purId);
+      }
+      await ordersApi.update(ordId, {
+        purchase_cost_inr: 0,
+        status: 'Pending',
+        order_status: 'Pending',
+        created_at: nowIso,
+      });
+
+      setShowEditPurchaseModal(false);
+    } catch (err) {
+      console.error('Failed to revert purchase', err);
+      alert('Error reverting purchase. Reloading data...');
+      loadAllData(false);
+    } finally {
+      setRevertingPurchase(false);
+    }
+  };
+
+  const handleSavePurchaseEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrderForPurchaseEdit) return;
+    const ordId = selectedOrderForPurchaseEdit.id;
+    const purId = purchaseEditForm.purchase_id;
+    const isStock = purchaseEditForm.is_in_stock;
+    const pVal = parseFloat(String(purchaseEditForm.purchase_value)) || 0;
+    const newQty = parseInt(String(purchaseEditForm.qty)) || selectedOrderForPurchaseEdit.qty || 1;
+
+    try {
+      setSavingPurchaseEdit(true);
+
+      const targetStatus = isStock ? 'In Stock' : 'Ready to Ship';
+      const targetOrderStatus = isStock ? 'In Stock' : (selectedOrderForPurchaseEdit.company || 'ADBH');
+
+      const partnerName = isStock
+        ? 'In Stock'
+        : (purchaseEditForm.purchase_partner_name?.trim() === 'In Stock' || !purchaseEditForm.purchase_partner_name?.trim()
+            ? (selectedOrderForPurchaseEdit.seller_account || selectedOrderForPurchaseEdit.account_name || 'Vendor')
+            : purchaseEditForm.purchase_partner_name.trim());
+
+      const notesVal = isStock
+        ? (purchaseEditForm.notes || 'In-Stock Order')
+        : (purchaseEditForm.notes?.replace(/in-stock/gi, '').trim() || null);
+
+      const purStatus = isStock ? 'Received' : 'Purchased';
+
+      // Optimistic updates
+      setReadyOrders(prev => prev.map(o => {
+        if (o.id === ordId) {
+          return {
+            ...o,
+            purchase_cost_inr: pVal,
+            qty: newQty,
+            oi: purchaseEditForm.delivery_code || o.oi,
+            arriving_date: purchaseEditForm.estimated_shipment_date || o.arriving_date,
+            status: targetStatus,
+            order_status: targetOrderStatus,
+          };
+        }
+        return o;
+      }));
+
+      setAllOrdersList(prev => prev.map(o => {
+        if (o.id === ordId) {
+          return {
+            ...o,
+            purchase_cost_inr: pVal,
+            qty: newQty,
+            oi: purchaseEditForm.delivery_code || o.oi,
+            arriving_date: purchaseEditForm.estimated_shipment_date || o.arriving_date,
+            status: targetStatus,
+            order_status: targetOrderStatus,
+          };
+        }
+        return o;
+      }));
+
+      if (purId) {
+        await purchasesApi.update(purId, {
+          purchase_value: pVal,
+          qty: newQty,
+          purchase_partner_name: partnerName,
+          po_number: purchaseEditForm.po_number || null,
+          delivery_code: purchaseEditForm.delivery_code || null,
+          estimated_shipment_date: purchaseEditForm.estimated_shipment_date || null,
+          notes: notesVal,
+          status: purStatus,
+        });
+        setPurchases(prev => prev.map(p => p.id === purId ? {
+          ...p,
+          purchase_value: pVal,
+          qty: newQty,
+          purchase_partner_name: partnerName,
+          po_number: purchaseEditForm.po_number || null,
+          delivery_code: purchaseEditForm.delivery_code || null,
+          estimated_shipment_date: purchaseEditForm.estimated_shipment_date || null,
+          notes: notesVal,
+          status: purStatus,
+        } : p));
+      } else {
+        const createdPur = await purchasesApi.create({
+          order_id: ordId,
+          order_date: new Date().toISOString().split('T')[0],
+          product_name: selectedOrderForPurchaseEdit.product_name,
+          purchase_value: pVal,
+          other_cost: 0,
+          extra_cost: 0,
+          purchase_partner_name: partnerName,
+          po_number: purchaseEditForm.po_number || null,
+          delivery_code: purchaseEditForm.delivery_code || null,
+          estimated_shipment_date: purchaseEditForm.estimated_shipment_date || null,
+          notes: notesVal,
+          status: purStatus,
+          company: selectedOrderForPurchaseEdit.company || 'ADBH',
+          qty: newQty,
+        });
+        if (createdPur?.data) {
+          setPurchases(prev => [createdPur.data, ...prev]);
+        }
+      }
+
+      await ordersApi.update(ordId, {
+        purchase_cost_inr: pVal,
+        qty: newQty,
+        oi: purchaseEditForm.delivery_code || undefined,
+        arriving_date: purchaseEditForm.estimated_shipment_date || undefined,
+        status: targetStatus,
+        order_status: targetOrderStatus,
+      });
+
+      setShowEditPurchaseModal(false);
+    } catch (err) {
+      console.error('Failed to save purchase edit', err);
+      alert('Error updating purchase details. Reloading...');
+      loadAllData(false);
+    } finally {
+      setSavingPurchaseEdit(false);
     }
   };
 
@@ -585,89 +1255,452 @@ export default function ShipmentsPage() {
         )}
       </div>
 
-      {/* Date Range & Search Filter Controls */}
-      <div className="bg-white border border-[#c3c4c7] p-3 shadow-xs rounded-sm flex flex-wrap items-center justify-between gap-3">
-        {/* Search Input Bar */}
-        <div className="relative flex-1 min-w-[240px] max-w-md">
-          <Search className="w-4 h-4 text-[#50575e] absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search order #, tracking ID, carrier, product, buyer..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white border border-[#8c8f94] text-xs font-semibold pl-9 pr-8 py-1.5 rounded-xs focus:border-[#2271b1] outline-none"
-          />
-          {searchQuery && (
+      {/* Comprehensive Filter Toolbar */}
+      <div className="bg-white border border-[#c3c4c7] p-3.5 shadow-xs rounded-sm space-y-3">
+        {/* Row 1: Status Filter Pills based on active tab + Quick Clear Button */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-bold text-[#50575e] uppercase tracking-wider flex items-center gap-1 mr-1">
+              <Filter className="w-3.5 h-3.5 text-[#2271b1]" />
+              <span>Status:</span>
+            </span>
+
+            {activeTab === 'ready' ? (
+              <>
+                <button
+                  onClick={() => setSelectedReadyStatus('All')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border ${selectedReadyStatus === 'All'
+                    ? 'bg-[#2271b1] text-white border-[#135e96] shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  All Ready ({readyOrders.filter(o => isAllowedCompany(o.company)).length})
+                </button>
+
+                <button
+                  onClick={() => setSelectedReadyStatus(selectedReadyStatus === 'Ready to Ship' ? 'All' : 'Ready to Ship')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedReadyStatus === 'Ready to Ship'
+                    ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Ready to Ship</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedReadyStatus === 'Ready to Ship' ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-800'}`}>
+                    {readyOrders.filter(o => {
+                      if (!isAllowedCompany(o.company)) return false;
+                      const pur = purchases.find((p: any) => p.order_id === o.id);
+                      const isInStock = (o.order_status || '').toLowerCase() === 'in stock' || o.status === 'In Stock' || Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+                      const isPurchaseReceived = Boolean(pur && (pur.status === 'Received' || pur.status === 'Completed'));
+                      const isPurchasePending = !isInStock && !isPurchaseReceived && (o.status === 'Purchase Pending' || o.status === 'Pending' || (pur && pur.status !== 'Received'));
+                      return isPurchaseReceived || (!isInStock && !isPurchasePending);
+                    }).length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedReadyStatus(selectedReadyStatus === 'Purchase Pending' ? 'All' : 'Purchase Pending')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedReadyStatus === 'Purchase Pending'
+                    ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Purchase Pending</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedReadyStatus === 'Purchase Pending' ? 'bg-white text-amber-700' : 'bg-amber-100 text-amber-800'}`}>
+                    {readyOrders.filter(o => {
+                      if (!isAllowedCompany(o.company)) return false;
+                      const pur = purchases.find((p: any) => p.order_id === o.id);
+                      const isInStock = (o.order_status || '').toLowerCase() === 'in stock' || o.status === 'In Stock' || Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+                      const isPurchaseReceived = Boolean(pur && (pur.status === 'Received' || pur.status === 'Completed'));
+                      return !isInStock && !isPurchaseReceived && (o.status === 'Purchase Pending' || o.status === 'Pending' || (pur && pur.status !== 'Received'));
+                    }).length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedReadyStatus(selectedReadyStatus === 'In Stock' ? 'All' : 'In Stock')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedReadyStatus === 'In Stock'
+                    ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <PackageCheck className="w-3.5 h-3.5" />
+                  <span>In Stock</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedReadyStatus === 'In Stock' ? 'bg-white text-emerald-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                    {readyOrders.filter(o => {
+                      if (!isAllowedCompany(o.company)) return false;
+                      const pur = purchases.find((p: any) => p.order_id === o.id);
+                      return (o.order_status || '').toLowerCase() === 'in stock' || o.status === 'In Stock' || Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
+                    }).length}
+                  </span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setSelectedDispatchedStatus('All')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border ${selectedDispatchedStatus === 'All'
+                    ? 'bg-[#2271b1] text-white border-[#135e96] shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  All Dispatched ({shipments.filter(s => isAllowedCompany(s.company)).length})
+                </button>
+
+                <button
+                  onClick={() => setSelectedDispatchedStatus(selectedDispatchedStatus === 'In Transit' ? 'All' : 'In Transit')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedDispatchedStatus === 'In Transit'
+                    ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <Truck className="w-3.5 h-3.5" />
+                  <span>In Transit</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedDispatchedStatus === 'In Transit' ? 'bg-white text-emerald-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                    {shipments.filter(s => isAllowedCompany(s.company) && (s.status || 'In Transit').toLowerCase() === 'in transit').length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedDispatchedStatus(selectedDispatchedStatus === 'Shipped' ? 'All' : 'Shipped')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedDispatchedStatus === 'Shipped'
+                    ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <PackageCheck className="w-3.5 h-3.5" />
+                  <span>Shipped</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedDispatchedStatus === 'Shipped' ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-800'}`}>
+                    {shipments.filter(s => isAllowedCompany(s.company) && s.status?.toLowerCase() === 'shipped').length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedDispatchedStatus(selectedDispatchedStatus === 'Delivered' ? 'All' : 'Delivered')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedDispatchedStatus === 'Delivered'
+                    ? 'bg-purple-600 text-white border-purple-700 shadow-xs'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Delivered</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedDispatchedStatus === 'Delivered' ? 'bg-white text-purple-700' : 'bg-purple-100 text-purple-800'}`}>
+                    {shipments.filter(s => isAllowedCompany(s.company) && s.status?.toLowerCase() === 'delivered').length}
+                  </span>
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Reset Filters button */}
+          {hasActiveFilters && (
             <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-2 text-[#50575e] hover:text-[#1d2327]"
+              onClick={resetAllFilters}
+              className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-[#f0f0f1] text-[#d63638] font-bold border border-[#c3c4c7] rounded-xs transition-all shadow-xs text-xs ml-auto"
             >
-              <X className="w-4 h-4" />
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset All Filters</span>
             </button>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <div className="flex items-center gap-1.5">
-            <Calendar className="w-3.5 h-3.5 text-[#2271b1]" />
-            <span className="font-semibold text-[#50575e]">Start:</span>
+        {/* Row 2: Secondary Dropdown Filters Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2.5 pt-2 border-t border-[#e0e0e0]">
+          {/* 1. Company Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Building2 className="w-3 h-3 text-[#2271b1]" />
+              <span>Company</span>
+            </label>
+            <select
+              value={selectedCompany}
+              onChange={(e) => setSelectedCompany(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Companies ({availableCompanies.length})</option>
+              {availableCompanies.map(comp => {
+                const count = activeTab === 'ready'
+                  ? readyOrders.filter(o => o.company?.toLowerCase() === comp.toLowerCase()).length
+                  : shipments.filter(s => {
+                    const match = allOrdersList.find((o: any) => o.id === s.order_id);
+                    return (s.company || match?.company)?.toLowerCase() === comp.toLowerCase();
+                  }).length;
+                return (
+                  <option key={comp} value={comp}>
+                    {comp} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* 2. Carrier / Partner Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Truck className="w-3 h-3 text-[#2271b1]" />
+              <span>Carrier / Partner</span>
+            </label>
+            <select
+              value={selectedCarrier}
+              onChange={(e) => setSelectedCarrier(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Carriers ({availableCarriers.length})</option>
+              {availableCarriers.map(carrier => {
+                const count = activeTab === 'ready'
+                  ? readyOrders.filter(o => (o.delivery_service || '').toLowerCase() === carrier.toLowerCase()).length
+                  : shipments.filter(s => (s.shipment_partner || '').toLowerCase() === carrier.toLowerCase()).length;
+                return (
+                  <option key={carrier} value={carrier}>
+                    {carrier} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* 3. Seller Account Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Seller Account</label>
+            <select
+              value={selectedSellerAccount}
+              onChange={(e) => setSelectedSellerAccount(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Accounts ({availableSellerAccounts.length})</option>
+              {availableSellerAccounts.map(acc => (
+                <option key={acc} value={acc}>
+                  {acc}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4. Label Status Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Tag className="w-3 h-3 text-[#2271b1]" />
+              <span>Label Status</span>
+            </label>
+            <select
+              value={selectedLabelType}
+              onChange={(e) => setSelectedLabelType(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Labels</option>
+              <option value="free">✓ Free Label Only</option>
+              <option value="paid">💵 Paid Label Only</option>
+            </select>
+          </div>
+
+          {/* 5. Date Field Type */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-[#2271b1]" />
+              <span>Filter Date By</span>
+            </label>
+            <select
+              value={dateFieldType}
+              onChange={(e) => setDateFieldType(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="process_date">Order Process Date</option>
+              <option value="shipping_date">Shipping Date</option>
+              <option value="last_delivery_date">Last Delivery Date</option>
+              <option value="arriving_date">Arriving Date</option>
+            </select>
+          </div>
+
+          {/* 6. Start Date */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Start Date</label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+              className="w-full px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs font-medium outline-none focus:border-[#2271b1]"
             />
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="font-semibold text-[#50575e]">End:</span>
+
+          {/* 7. End Date */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">End Date</label>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="px-2.5 py-1 bg-white border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+              className="w-full px-2 py-1 bg-white border border-[#8c8f94] rounded-xs text-xs font-medium outline-none focus:border-[#2271b1]"
             />
           </div>
-          {(startDate || endDate || searchQuery) && (
-            <button
-              onClick={() => { setStartDate(''); setEndDate(''); setSearchQuery(''); }}
-              className="flex items-center gap-1 px-2.5 py-1 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#d63638] font-bold border border-[#c3c4c7] rounded-xs transition-all"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset</span>
-            </button>
-          )}
         </div>
+
+        {/* Row 3: Quick Date Preset Pills & Live Search Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-[#e0e0e0]">
+          {/* Quick Date Presets */}
+          <div className="flex items-center gap-1.5 flex-wrap text-xs">
+            <span className="text-[10px] font-bold text-[#50575e] uppercase tracking-wider mr-1">Presets:</span>
+            <button
+              onClick={() => setQuickDate('today')}
+              className="px-2 py-0.5 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs text-[11px] transition-all"
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setQuickDate('yesterday')}
+              className="px-2 py-0.5 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs text-[11px] transition-all"
+            >
+              Yesterday
+            </button>
+            <button
+              onClick={() => setQuickDate('7days')}
+              className="px-2 py-0.5 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs text-[11px] transition-all"
+            >
+              Last 7 Days
+            </button>
+            <button
+              onClick={() => setQuickDate('month')}
+              className="px-2 py-0.5 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs text-[11px] transition-all"
+            >
+              This Month
+            </button>
+            <button
+              onClick={() => setQuickDate('all')}
+              className="px-2 py-0.5 bg-[#f6f7f7] hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs text-[11px] transition-all"
+            >
+              All Time
+            </button>
+          </div>
+
+          {/* Search Input Bar */}
+          <div className="relative flex-1 min-w-[240px] max-w-md">
+            <Search className="w-4 h-4 text-[#50575e] absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search order #, AWB, forwarding #, carrier, product, buyer..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white border border-[#8c8f94] text-xs font-semibold pl-9 pr-8 py-1.5 rounded-xs focus:border-[#2271b1] outline-none"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-2 text-[#50575e] hover:text-[#1d2327]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Row 4: Active Filter Tags */}
+        {hasActiveFilters && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-[#f0f0f1] text-[11px]">
+            <span className="font-bold text-[#50575e]">Active Filters:</span>
+            {selectedCompany !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-xs font-medium">
+                Company: <b>{selectedCompany}</b>
+                <button onClick={() => setSelectedCompany('All')} className="hover:text-blue-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {selectedCarrier !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-900 border border-orange-200 rounded-xs font-medium">
+                Carrier: <b>{selectedCarrier}</b>
+                <button onClick={() => setSelectedCarrier('All')} className="hover:text-orange-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {activeTab === 'ready' && selectedReadyStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-900 border border-indigo-200 rounded-xs font-medium">
+                Status: <b>{selectedReadyStatus}</b>
+                <button onClick={() => setSelectedReadyStatus('All')} className="hover:text-indigo-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {activeTab === 'dispatched' && selectedDispatchedStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-900 border border-purple-200 rounded-xs font-medium">
+                Status: <b>{selectedDispatchedStatus}</b>
+                <button onClick={() => setSelectedDispatchedStatus('All')} className="hover:text-purple-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {selectedSellerAccount !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xs font-medium">
+                Account: <b>{selectedSellerAccount}</b>
+                <button onClick={() => setSelectedSellerAccount('All')} className="hover:text-slate-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {selectedLabelType !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-xs font-medium">
+                Label: <b>{selectedLabelType === 'free' ? 'Free Label' : 'Paid Label'}</b>
+                <button onClick={() => setSelectedLabelType('All')} className="hover:text-emerald-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {(startDate || endDate) && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded-xs font-medium">
+                Date: <b>{startDate || 'Start'} to {endDate || 'End'}</b>
+                <button onClick={() => { setStartDate(''); setEndDate(''); }} className="hover:text-amber-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {searchQuery && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xs font-medium">
+                Search: <b>&quot;{searchQuery}&quot;</b>
+                <button onClick={() => setSearchQuery('')} className="hover:text-slate-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* WP Admin Tabs Bar */}
-      <div className="flex items-center gap-2 border-b border-[#c3c4c7] pb-2">
-        <button
-          onClick={() => setActiveTab('ready')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-xs transition-all ${activeTab === 'ready'
-            ? 'bg-[#2271b1] text-white shadow-xs'
-            : 'bg-[#f6f7f7] text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f0f0f1]'
-            }`}
-        >
-          <Clock className="w-3.5 h-3.5" />
-          <span>Orders Ready to Ship</span>
-          <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === 'ready' ? 'bg-white text-[#2271b1]' : 'bg-[#e0e0e0] text-[#1d2327]'}`}>
-            {dateFilteredReadyOrders.length}
-          </span>
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#c3c4c7] pb-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab('ready')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-xs transition-all ${activeTab === 'ready'
+              ? 'bg-[#2271b1] text-white shadow-xs'
+              : 'bg-[#f6f7f7] text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f0f0f1]'
+              }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>Orders Ready to Ship</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === 'ready' ? 'bg-white text-[#2271b1]' : 'bg-[#e0e0e0] text-[#1d2327]'}`}>
+              {dateFilteredReadyOrders.length}
+            </span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('dispatched')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-xs transition-all ${activeTab === 'dispatched'
-            ? 'bg-[#2271b1] text-white shadow-xs'
-            : 'bg-[#f6f7f7] text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f0f0f1]'
-            }`}
-        >
-          <Truck className="w-3.5 h-3.5" />
-          <span>Dispatched Carrier Shipments</span>
-          <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === 'dispatched' ? 'bg-white text-[#2271b1]' : 'bg-[#e0e0e0] text-[#1d2327]'}`}>
-            {dateFilteredShipments.length}
-          </span>
-        </button>
+          <button
+            onClick={() => setActiveTab('dispatched')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-xs transition-all ${activeTab === 'dispatched'
+              ? 'bg-[#2271b1] text-white shadow-xs'
+              : 'bg-[#f6f7f7] text-[#2c3338] border border-[#c3c4c7] hover:bg-[#f0f0f1]'
+              }`}
+          >
+            <Truck className="w-3.5 h-3.5" />
+            <span>Dispatched Carrier Shipments</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === 'dispatched' ? 'bg-white text-[#2271b1]' : 'bg-[#e0e0e0] text-[#1d2327]'}`}>
+              {dateFilteredShipments.length}
+            </span>
+          </button>
+        </div>
+
+        {/* Column Visibility Manager */}
+        <div>
+          {activeTab === 'ready' ? (
+            <ColumnVisibilityDropdown
+              columns={READY_TABLE_COLUMNS}
+              visibleColumns={visibleColumnsReady}
+              onChange={setVisibleColumnsReady}
+              presets={READY_COLUMN_PRESETS}
+              storageKey="crm_shipments_ready_column_visibility"
+            />
+          ) : (
+            <ColumnVisibilityDropdown
+              columns={DISPATCHED_TABLE_COLUMNS}
+              visibleColumns={visibleColumnsDispatched}
+              onChange={setVisibleColumnsDispatched}
+              presets={DISPATCHED_COLUMN_PRESETS}
+              storageKey="crm_shipments_dispatched_column_visibility"
+            />
+          )}
+        </div>
       </div>
 
       {/* TAB 1: Orders Ready to Ship */}
@@ -689,27 +1722,27 @@ export default function ShipmentsPage() {
                 <ResizableTable className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Process Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Company</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Partner / Seller</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Status</th>
-                      <th className="py-2.5 px-3 text-right">Actions</th>
+                      {visibleColumnsReady['order_process_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Process Date</th>}
+                      {visibleColumnsReady['shipping_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
+                      {visibleColumnsReady['last_delivery_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
+                      {visibleColumnsReady['arriving_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>}
+                      {visibleColumnsReady['order_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
+                      {visibleColumnsReady['po_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>}
+                      {visibleColumnsReady['shipment_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>}
+                      {visibleColumnsReady['company'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Company</th>}
+                      {visibleColumnsReady['seller_account'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Partner / Seller</th>}
+                      {visibleColumnsReady['product_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>}
+                      {visibleColumnsReady['qty'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
+                      {visibleColumnsReady['consignee_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
+                      {visibleColumnsReady['shipment_address_1'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
+                      {visibleColumnsReady['shipment_address_2'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
+                      {visibleColumnsReady['city'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
+                      {visibleColumnsReady['state'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
+                      {visibleColumnsReady['zip_code'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
+                      {visibleColumnsReady['mobile_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
+                      {visibleColumnsReady['country'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
+                      {visibleColumnsReady['status'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Status</th>}
+                      {visibleColumnsReady['actions'] !== false && <th className="py-2.5 px-3 text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#dcdcde]">
@@ -731,120 +1764,139 @@ export default function ShipmentsPage() {
 
                       return (
                         <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.order_process_date || ord.order_date || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.shipping_date || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.last_delivery_date || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.arriving_date || pur?.estimated_shipment_date || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">{pur?.po_number || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">{ord.shipment_id || ord.oi || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1]">{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ord.product_name}>
-                            <div className="flex items-center gap-2">
-                              {ord.product_image && (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img
-                                  src={getImageUrl(ord.product_image)}
-                                  alt=""
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).style.display = 'none';
-                                  }}
-                                  className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                                />
-                              )}
-                              {ord.product_url ? (
-                                <a
-                                  href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
-                                >
-                                  <span className="truncate">{ord.product_name}</span>
-                                  <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
-                                </a>
-                              ) : (
-                                <span>{ord.product_name}</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">{ord.qty || 1}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.consignee_name || ord.buyer_name || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={ord.shipment_address_2}>{ord.shipment_address_2 || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.city || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.state || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">{ord.zip_code || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
-                            {ord.mobile_number ? (
-                              <span className="inline-flex items-center gap-1">
-                                <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
-                                <span>{ord.mobile_number}</span>
-                              </span>
-                            ) : '—'}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.country || 'USA'}</td>
+                          {visibleColumnsReady['order_process_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.order_process_date || ord.order_date || '—'}</td>}
+                          {visibleColumnsReady['shipping_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.shipping_date || '—'}</td>}
+                          {visibleColumnsReady['last_delivery_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.last_delivery_date || '—'}</td>}
+                          {visibleColumnsReady['arriving_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.arriving_date || pur?.estimated_shipment_date || '—'}</td>}
+                          {visibleColumnsReady['order_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>}
+                          {visibleColumnsReady['po_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">{pur?.po_number || '—'}</td>}
+                          {visibleColumnsReady['shipment_id'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">{ord.shipment_id || ord.oi || '—'}</td>}
+                          {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>}
+                          {visibleColumnsReady['seller_account'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1]">{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>}
+                          {visibleColumnsReady['product_name'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ord.product_name}>
+                              <div className="flex items-center gap-2">
+                                {ord.product_image && (
+                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                  <img
+                                    src={getImageUrl(ord.product_image)}
+                                    alt=""
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                    className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                  />
+                                )}
+                                {ord.product_url ? (
+                                  <a
+                                    href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
+                                  >
+                                    <span className="truncate">{ord.product_name}</span>
+                                    <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
+                                  </a>
+                                ) : (
+                                  <span>{ord.product_name}</span>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                          {visibleColumnsReady['qty'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">{ord.qty || 1}</td>}
+                          {visibleColumnsReady['consignee_name'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.consignee_name || ord.buyer_name || '—'}</td>}
+                          {visibleColumnsReady['shipment_address_1'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>}
+                          {visibleColumnsReady['shipment_address_2'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={ord.shipment_address_2}>{ord.shipment_address_2 || '—'}</td>}
+                          {visibleColumnsReady['city'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.city || '—'}</td>}
+                          {visibleColumnsReady['state'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.state || '—'}</td>}
+                          {visibleColumnsReady['zip_code'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">{ord.zip_code || '—'}</td>}
+                          {visibleColumnsReady['mobile_number'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                              {ord.mobile_number ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
+                                  <span>{ord.mobile_number}</span>
+                                </span>
+                              ) : '—'}
+                            </td>
+                          )}
+                          {visibleColumnsReady['country'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.country || 'USA'}</td>}
 
                           {/* STATUS Column */}
-                          <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
-                            {isInStock ? (
-                              <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                                <span>In Stock</span>
-                              </span>
-                            ) : isPurchasePending ? (
-                              <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
-                                <Clock className="w-3 h-3 text-amber-700 animate-pulse" />
-                                <span>Purchase Pending</span>
-                              </span>
-                            ) : (
-                              <span className="px-2.5 py-1 bg-blue-100 text-blue-900 border border-blue-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
-                                <CheckCircle2 className="w-3 h-3 text-blue-700" />
-                                <span>Purchase Received</span>
-                              </span>
-                            )}
-                          </td>
-
-                          {/* ACTIONS Column */}
-                          <td className="py-2 px-3 text-right">
-                            {ord.status === 'Shipped' || ord.status === 'Delivered' ? (
-                              <span className="px-3 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[11px] rounded-xs">
-                                ✓ Dispatched
-                              </span>
-                            ) : isPurchasePending ? (
-                              <div className="flex items-center justify-end gap-1.5">
+                          {visibleColumnsReady['status'] !== false && (
+                            <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
+                              <div className="inline-flex items-center justify-center gap-1.5">
+                                {isInStock ? (
+                                  <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                                    <span>In Stock</span>
+                                  </span>
+                                ) : isPurchasePending ? (
+                                  <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
+                                    <Clock className="w-3 h-3 text-amber-700 animate-pulse" />
+                                    <span>Purchase Pending</span>
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-1 bg-blue-100 text-blue-900 border border-blue-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
+                                    <CheckCircle2 className="w-3 h-3 text-blue-700" />
+                                    <span>Purchase Received</span>
+                                  </span>
+                                )}
                                 <button
-                                  onClick={() => handleQuickReceive(ord)}
-                                  disabled={receivingOrderId === ord.id}
-                                  className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs disabled:opacity-50"
-                                  title="Mark Purchase as Received to enable Dispatch"
+                                  type="button"
+                                  onClick={() => openEditPurchaseModal(ord)}
+                                  className="px-1.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-[#c3c4c7] font-semibold text-[10px] rounded-xs shadow-2xs inline-flex items-center gap-1 transition-all"
+                                  title="Edit purchase / in-stock status"
                                 >
-                                  {receivingOrderId === ord.id ? (
-                                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                  ) : (
-                                    <PackageCheck className="w-3 h-3" />
-                                  )}
-                                  <span>{receivingOrderId === ord.id ? 'Receiving...' : 'Mark Received'}</span>
-                                </button>
-                                <button
-                                  disabled
-                                  className="px-2.5 py-1 bg-slate-200 text-slate-400 font-bold text-[11px] rounded-xs cursor-not-allowed border border-slate-300 flex items-center gap-1"
-                                  title="Cannot dispatch: Purchase not received yet"
-                                >
-                                  <Truck className="w-3 h-3 opacity-40" />
-                                  <span>Dispatch</span>
+                                  <Edit2 className="w-2.5 h-2.5 text-slate-500" />
+                                  <span>Edit</span>
                                 </button>
                               </div>
-                            ) : (
-                              <button
-                                onClick={() => openDispatchModal(ord)}
-                                className="px-3 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs shadow-xs flex items-center gap-1 ml-auto transition-all"
-                              >
-                                <Truck className="w-3 h-3" />
-                                <span>Dispatch Carrier</span>
-                              </button>
-                            )}
-                          </td>
+                            </td>
+                          )}
+
+                          {/* ACTIONS Column */}
+                          {visibleColumnsReady['actions'] !== false && (
+                            <td className="py-2 px-3 text-right">
+                              {ord.status === 'Shipped' || ord.status === 'Delivered' ? (
+                                <span className="px-3 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[11px] rounded-xs">
+                                  ✓ Dispatched
+                                </span>
+                              ) : isPurchasePending ? (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    onClick={() => handleQuickReceive(ord)}
+                                    disabled={receivingOrderId === ord.id}
+                                    className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs disabled:opacity-50"
+                                    title="Mark Purchase as Received to enable Dispatch"
+                                  >
+                                    {receivingOrderId === ord.id ? (
+                                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <PackageCheck className="w-3 h-3" />
+                                    )}
+                                    <span>{receivingOrderId === ord.id ? 'Receiving...' : 'Mark Received'}</span>
+                                  </button>
+                                  <button
+                                    disabled
+                                    className="px-2.5 py-1 bg-slate-200 text-slate-400 font-bold text-[11px] rounded-xs cursor-not-allowed border border-slate-300 flex items-center gap-1"
+                                    title="Cannot dispatch: Purchase not received yet"
+                                  >
+                                    <Truck className="w-3 h-3 opacity-40" />
+                                    <span>Dispatch</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => openDispatchModal(ord)}
+                                  className="px-3 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs shadow-xs flex items-center gap-1 ml-auto transition-all"
+                                >
+                                  <Truck className="w-3 h-3" />
+                                  <span>Dispatch Carrier</span>
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -921,33 +1973,33 @@ export default function ShipmentsPage() {
                 <ResizableTable className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Carrier Partner</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">AWB / Tracking</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Forwarding #</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Weight (kg / oz)</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Dimensions (cm)</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Vol. Wt (kg)</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Cost Breakdown</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Total Cost (₹)</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap">Forwarding / Tracking Number</th>
-                      <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Status</th>
-                      <th className="py-2.5 px-3 text-right">Actions</th>
+                      {visibleColumnsDispatched['carrier_partner'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Carrier Partner</th>}
+                      {visibleColumnsDispatched['awb_tracking'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">AWB / Tracking</th>}
+                      {visibleColumnsDispatched['forwarding_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Forwarding #</th>}
+                      {visibleColumnsDispatched['shipping_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
+                      {visibleColumnsDispatched['last_delivery_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
+                      {visibleColumnsDispatched['arriving_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>}
+                      {visibleColumnsDispatched['order_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
+                      {visibleColumnsDispatched['po_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>}
+                      {visibleColumnsDispatched['shipment_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>}
+                      {visibleColumnsDispatched['product_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>}
+                      {visibleColumnsDispatched['qty'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
+                      {visibleColumnsDispatched['consignee_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
+                      {visibleColumnsDispatched['shipment_address_1'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
+                      {visibleColumnsDispatched['shipment_address_2'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
+                      {visibleColumnsDispatched['city'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
+                      {visibleColumnsDispatched['state'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
+                      {visibleColumnsDispatched['zip_code'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
+                      {visibleColumnsDispatched['mobile_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
+                      {visibleColumnsDispatched['country'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
+                      {visibleColumnsDispatched['weight'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Weight (kg / oz)</th>}
+                      {visibleColumnsDispatched['dimensions'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Dimensions (cm)</th>}
+                      {visibleColumnsDispatched['vol_wt'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Vol. Wt (kg)</th>}
+                      {visibleColumnsDispatched['cost_breakdown'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Cost Breakdown</th>}
+                      {visibleColumnsDispatched['total_cost'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Total Cost (₹)</th>}
+                      {visibleColumnsDispatched['forwarding_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap">Forwarding ID</th>}
+                      {visibleColumnsDispatched['status'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Status</th>}
+                      {visibleColumnsDispatched['actions'] !== false && <th className="py-2.5 px-3 text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#dcdcde]">
@@ -974,183 +2026,237 @@ export default function ShipmentsPage() {
 
                       return (
                         <tr key={ship.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
-                            <span className={`px-2 py-0.5 rounded-xs border font-bold text-[10px] ${isRbs ? 'bg-blue-100 text-blue-900 border-blue-300' : 'bg-orange-100 text-orange-900 border-orange-300'}`}>
-                              {ship.shipment_partner}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
-                            {ship.awb_number || ship.tracking_id}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] font-semibold">
-                            {ship.forwarding_number || '—'}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
-                            {shippingDate}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
-                            {lastDeliveryDate}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
-                            {arriveDate}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
-                            {orderId}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">
-                            {pur?.po_number || '—'}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">
-                            {shipmentId}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ship.product_name}>
-                            <div className="flex items-center gap-2">
-                              {(ship.product_image || matchingOrder?.product_image) && (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img
-                                  src={getImageUrl(ship.product_image || matchingOrder?.product_image)}
-                                  alt=""
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).style.display = 'none';
-                                  }}
-                                  className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                                />
-                              )}
-                              <span>{ship.product_name}</span>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">
-                            {qty}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
-                            {consignee}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={addr1}>
-                            {addr1}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={addr2}>
-                            {addr2}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
-                            {city}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
-                            {state}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
-                            {zipCode}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
-                            {mobile !== '—' ? (
-                              <span className="inline-flex items-center gap-1">
-                                <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
-                                <span>{mobile}</span>
+                          {visibleColumnsDispatched['carrier_partner'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
+                              <span className={`px-2 py-0.5 rounded-xs border font-bold text-[10px] ${isRbs ? 'bg-blue-100 text-blue-900 border-blue-300' : 'bg-orange-100 text-orange-900 border-orange-300'}`}>
+                                {ship.shipment_partner}
                               </span>
-                            ) : '—'}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
-                            {country}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono">
-                            <span className="font-bold text-[#1d2327]">{ship.weight} kg</span>
-                            <span className="text-[10px] text-blue-700 font-semibold block">({shipOz} oz)</span>
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e]">
-                            {ship.dimensions || (ship.length && ship.width && ship.height ? `${ship.length} × ${ship.width} × ${ship.height} cm` : '—')}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">
-                            {volWtVal !== '—' ? `${volWtVal} kg` : '—'}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[10px]">
-                            {isRbs ? (
-                              <div className="flex flex-col gap-0.5 font-mono">
-                                <span>Dom: <b>₹{(ship.domestic_cost || 0).toFixed(2)}</b></span>
-                                <span>Intl: <b>₹{(ship.international_cost || 0).toFixed(2)}</b></span>
-                                {ship.dump_cost > 0 && (
-                                  <span className="text-emerald-800 font-semibold">
-                                    Dump: ${ship.dump_cost.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.dump_cost * (ship.exchange_rate || 99.0)).toFixed(2)})</span>
-                                  </span>
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['awb_tracking'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
+                              {ship.awb_number || ship.tracking_id}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['forwarding_number'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] font-semibold">
+                              {ship.forwarding_number || '—'}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['shipping_date'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                              {shippingDate}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['last_delivery_date'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                              {lastDeliveryDate}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['arriving_date'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                              {arriveDate}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['order_number'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
+                              {orderId}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['po_number'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">
+                              {pur?.po_number || '—'}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['shipment_id'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">
+                              {shipmentId}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['product_name'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ship.product_name}>
+                              <div className="flex items-center gap-2">
+                                {(ship.product_image || matchingOrder?.product_image) && (
+                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                  <img
+                                    src={getImageUrl(ship.product_image || matchingOrder?.product_image)}
+                                    alt=""
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                    className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                  />
                                 )}
-                                {(ship.label_free || matchingOrder?.label_free) ? (
-                                  <span className="inline-flex items-center gap-1 text-emerald-800 font-bold">
-                                    <span>Label:</span>
-                                    <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-2xs text-[9px] uppercase font-mono tracking-wider">Free Label</span>
-                                  </span>
-                                ) : ship.label_cost_usd > 0 ? (
-                                  <span className="text-emerald-800 font-semibold">
-                                    Label: ${ship.label_cost_usd.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.label_cost_inr || (ship.label_cost_usd * (ship.exchange_rate || 99.0))).toFixed(2)})</span>
-                                  </span>
-                                ) : null}
+                                <span>{ship.product_name}</span>
                               </div>
-                            ) : (
-                              <span>Shipping: <b>₹{(ship.shipment_cost || 0).toFixed(2)}</b></span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">
-                            ₹{(ship.shipment_cost || 0).toFixed(2)}
-                          </td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono">
-                            {(() => {
-                              const fwd = ship.forwarding_number || matchingOrder?.label_tracking_id;
-                              const trk = ship.awb_number || ship.tracking_id;
-                              if (fwd && trk && fwd !== trk) {
-                                return (
-                                  <div className="flex flex-col gap-0.5">
-                                    <span className="font-bold text-[#1d2327] text-xs" title="Forwarding Number">{fwd}</span>
-                                    <span className="text-[10px] text-[#2271b1] font-semibold" title="AWB / Tracking Number">{trk}</span>
-                                  </div>
-                                );
-                              }
-                              const val = fwd || trk;
-                              return val ? (
-                                <span className="font-bold text-[#1d2327] text-xs">{val}</span>
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['qty'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">
+                              {qty}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['consignee_name'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
+                              {consignee}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['shipment_address_1'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={addr1}>
+                              {addr1}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['shipment_address_2'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={addr2}>
+                              {addr2}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['city'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
+                              {city}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['state'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
+                              {state}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['zip_code'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                              {zipCode}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['mobile_number'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                              {mobile !== '—' ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
+                                  <span>{mobile}</span>
+                                </span>
+                              ) : '—'}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['country'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                              {country}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['weight'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono">
+                              <span className="font-bold text-[#1d2327]">{ship.weight} kg</span>
+                              <span className="text-[10px] text-blue-700 font-semibold block">({shipOz} oz)</span>
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['dimensions'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e]">
+                              {ship.dimensions || (ship.length && ship.width && ship.height ? `${ship.length} × ${ship.width} × ${ship.height} cm` : '—')}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['vol_wt'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">
+                              {volWtVal !== '—' ? `${volWtVal} kg` : '—'}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['cost_breakdown'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[10px]">
+                              {isRbs ? (
+                                <div className="flex flex-col gap-0.5 font-mono">
+                                  <span>Dom: <b>₹{(ship.domestic_cost || 0).toFixed(2)}</b></span>
+                                  <span>Intl: <b>₹{(ship.international_cost || 0).toFixed(2)}</b></span>
+                                  {ship.dump_cost > 0 && (
+                                    <span className="text-emerald-800 font-semibold">
+                                      Dump: ${ship.dump_cost.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.dump_cost * (ship.exchange_rate || 99.0)).toFixed(2)})</span>
+                                    </span>
+                                  )}
+                                  {(ship.label_free || matchingOrder?.label_free) ? (
+                                    <span className="inline-flex items-center gap-1 text-emerald-800 font-bold">
+                                      <span>Label:</span>
+                                      <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-2xs text-[9px] uppercase font-mono tracking-wider">Free Label</span>
+                                    </span>
+                                  ) : ship.label_cost_usd > 0 ? (
+                                    <span className="text-emerald-800 font-semibold">
+                                      Label: ${ship.label_cost_usd.toFixed(2)} <span className="text-slate-600 font-normal">(₹{(ship.label_cost_inr || (ship.label_cost_usd * (ship.exchange_rate || 99.0))).toFixed(2)})</span>
+                                    </span>
+                                  ) : null}
+                                </div>
                               ) : (
-                                <span className="text-[#8c8f94]">—</span>
-                              );
-                            })()}
-                          </td>
-                          <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
-                            <select
-                              value={ship.status || 'In Transit'}
-                              onChange={(e) => handleUpdateStatus(ship.id, e.target.value)}
-                              className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${ship.status === 'Delivered'
-                                ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200'
-                                : ship.status === 'Shipped'
-                                  ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200'
-                                  : 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200'
-                                }`}
-                            >
-                              <option value="In Transit" className="bg-white text-blue-900 font-bold">In Transit</option>
-                              <option value="Shipped" className="bg-white text-blue-900 font-bold">Shipped</option>
-                              <option value="Delivered" className="bg-white text-purple-900 font-bold">Delivered</option>
-                            </select>
-                          </td>
-                          <td className="py-2 px-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {ship.status !== 'Delivered' && (
-                                <button
-                                  onClick={() => handleUpdateStatus(ship.id, 'Delivered')}
-                                  className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded-xs shadow-xs"
-                                >
-                                  Mark Delivered
-                                </button>
+                                <span>Shipping: <b>₹{(ship.shipment_cost || 0).toFixed(2)}</b></span>
                               )}
-                              <button
-                                onClick={() => openEditShipmentModal(ship)}
-                                className="p-1 text-[#2271b1] hover:bg-[#f0f0f1] rounded-xs"
-                                title="Edit Shipment Details"
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['total_cost'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">
+                              ₹{(ship.shipment_cost || 0).toFixed(2)}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['forwarding_id'] !== false && (
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono">
+                              {(() => {
+                                const fwd = ship.forwarding_number || matchingOrder?.label_tracking_id;
+                                const trk = ship.awb_number || ship.tracking_id;
+                                if (fwd && trk && fwd !== trk) {
+                                  return (
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="font-bold text-[#1d2327] text-xs" title="Forwarding ID">{fwd}</span>
+                                      <span className="text-[10px] text-[#2271b1] font-semibold" title="AWB / Tracking Number">{trk}</span>
+                                    </div>
+                                  );
+                                }
+                                const val = fwd || trk;
+                                return val ? (
+                                  <span className="font-bold text-[#1d2327] text-xs">{val}</span>
+                                ) : (
+                                  <span className="text-[#8c8f94]">—</span>
+                                );
+                              })()}
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['status'] !== false && (
+                            <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
+                              <select
+                                value={ship.status || 'In Transit'}
+                                onChange={(e) => handleUpdateStatus(ship.id, e.target.value)}
+                                className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${ship.status === 'Delivered'
+                                  ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200'
+                                  : ship.status === 'Shipped'
+                                    ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200'
+                                    : 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200'
+                                  }`}
                               >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteShipment(ship.id)}
-                                className="p-1 text-red-600 hover:bg-[#f0f0f1] rounded-xs"
-                                title="Delete Shipment"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
+                                <option value="In Transit" className="bg-white text-blue-900 font-bold">In Transit</option>
+                                <option value="Shipped" className="bg-white text-blue-900 font-bold">Shipped</option>
+                                <option value="Delivered" className="bg-white text-purple-900 font-bold">Delivered</option>
+                              </select>
+                            </td>
+                          )}
+                          {visibleColumnsDispatched['actions'] !== false && (
+                            <td className="py-2 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {ship.status !== 'Delivered' && (
+                                  <button
+                                    onClick={() => handleUpdateStatus(ship.id, 'Delivered')}
+                                    className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded-xs shadow-xs"
+                                  >
+                                    Mark Delivered
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => openEditShipmentModal(ship)}
+                                  className="p-1 text-[#2271b1] hover:bg-[#f0f0f1] rounded-xs"
+                                  title="Edit Shipment Details"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteShipment(ship.id)}
+                                  className="p-1 text-red-600 hover:bg-[#f0f0f1] rounded-xs"
+                                  title="Delete Shipment"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -1594,6 +2700,265 @@ export default function ShipmentsPage() {
                   <Truck className="w-3.5 h-3.5" />
                   <span>Confirm Dispatch</span>
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* WP Meta-Box Edit Purchase & Stock Modal */}
+      {showEditPurchaseModal && selectedOrderForPurchaseEdit && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#c3c4c7] w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl rounded-sm font-sans overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="bg-[#1d2327] text-white px-5 py-3.5 flex items-center justify-between shrink-0 border-b border-[#2c3338]">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-[#72aee6]" />
+                <span>
+                  Edit Purchase & Stock Status (Order #{selectedOrderForPurchaseEdit.order_number || selectedOrderForPurchaseEdit.id})
+                </span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowEditPurchaseModal(false)}
+                className="text-slate-400 hover:text-white font-bold text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePurchaseEdit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              {/* Scrollable Body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+                {/* Item Details Summary Box */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xs flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-[200px]">
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Product Name</div>
+                    <div className="text-xs font-bold text-slate-900 truncate max-w-md" title={selectedOrderForPurchaseEdit.product_name}>
+                      {selectedOrderForPurchaseEdit.product_name}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-slate-700">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase block">Company</span>
+                      <span className="font-semibold text-slate-900">{selectedOrderForPurchaseEdit.company || 'ADBH'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase block">Qty</span>
+                      <span className="font-bold text-slate-900">{purchaseEditForm.qty} unit(s)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Purchase Mode Switcher */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1.5 uppercase text-[10px] tracking-wider">
+                    Vendor Name:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPurchaseEditForm(prev => ({
+                        ...prev,
+                        is_in_stock: false,
+                        purchase_partner_name: (prev.purchase_partner_name === 'In Stock' || !prev.purchase_partner_name)
+                          ? (selectedOrderForPurchaseEdit?.seller_account || selectedOrderForPurchaseEdit?.account_name || '')
+                          : prev.purchase_partner_name,
+                        notes: prev.notes?.toLowerCase().includes('in-stock') ? '' : prev.notes
+                      }))}
+                      className={`p-3 text-left border rounded-xs transition-all flex items-start gap-2.5 ${!purchaseEditForm.is_in_stock
+                        ? 'border-[#2271b1] bg-blue-50/60 ring-1 ring-[#2271b1]'
+                        : 'border-slate-300 bg-white hover:bg-slate-50'
+                        }`}
+                    >
+                      <div className={`p-1.5 rounded-full ${!purchaseEditForm.is_in_stock ? 'bg-[#2271b1] text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        <DollarSign className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 text-xs">Purchase</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPurchaseEditForm(prev => ({
+                        ...prev,
+                        is_in_stock: true,
+                        purchase_partner_name: 'In Stock',
+                        notes: prev.notes || 'In-Stock Order'
+                      }))}
+                      className={`p-3 text-left border rounded-xs transition-all flex items-start gap-2.5 ${purchaseEditForm.is_in_stock
+                        ? 'border-emerald-600 bg-emerald-50/60 ring-1 ring-emerald-600'
+                        : 'border-slate-300 bg-white hover:bg-slate-50'
+                        }`}
+                    >
+                      <div className={`p-1.5 rounded-full ${purchaseEditForm.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        <PackageCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 text-xs">In-Stock</div>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Form Fields: In-Stock Mode */}
+                {purchaseEditForm.is_in_stock ? (
+                  <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xs space-y-3">
+                    {/* <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>In-Stock Fulfillment Active</span>
+                    </div> */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">
+                          Quantity (Qty) <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          required
+                          value={purchaseEditForm.qty || 1}
+                          onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, qty: parseInt(e.target.value) || 1 }))}
+                          placeholder="1"
+                          className="w-full px-2.5 py-1.5 bg-white border border-[#c3c4c7] rounded-xs text-xs font-bold text-slate-900 outline-none focus:border-[#2271b1]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">
+                          Purchase Price (INR ₹)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₹</span>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={purchaseEditForm.purchase_value === 0 ? '' : purchaseEditForm.purchase_value}
+                            onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, purchase_value: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))}
+                            placeholder="0.00"
+                            className="w-full pl-7 pr-2.5 py-1.5 bg-white border border-[#c3c4c7] rounded-xs text-xs font-bold text-slate-900 outline-none focus:border-[#2271b1]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Form Fields: Vendor Purchase Mode */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">
+                          Purchase Value / Cost (INR ₹) <span className="text-rose-600">*</span>
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₹</span>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            required
+                            value={purchaseEditForm.purchase_value || ''}
+                            onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, purchase_value: parseFloat(e.target.value) || 0 }))}
+                            placeholder="0.00"
+                            className="w-full pl-7 pr-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs font-bold text-slate-900 outline-none focus:border-[#2271b1]"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">
+                          Vendor / Supplier Name <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={purchaseEditForm.purchase_partner_name}
+                          onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, purchase_partner_name: e.target.value }))}
+                          placeholder="Supplier Name or Partner"
+                          className="w-full px-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">PO Number</label>
+                        <input
+                          type="text"
+                          value={purchaseEditForm.po_number}
+                          onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, po_number: e.target.value }))}
+                          placeholder="e.g. PO1234"
+                          className="w-full px-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs font-mono outline-none focus:border-[#2271b1]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">Delivery / Tracking Code</label>
+                        <input
+                          type="text"
+                          value={purchaseEditForm.delivery_code}
+                          onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, delivery_code: e.target.value }))}
+                          placeholder="Carrier code or OI"
+                          className="w-full px-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs font-mono outline-none focus:border-[#2271b1]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">Arrived / Delivery Date</label>
+                        <input
+                          type="date"
+                          value={purchaseEditForm.estimated_shipment_date}
+                          onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, estimated_shipment_date: e.target.value }))}
+                          className="w-full px-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Notes</label>
+                      <input
+                        type="text"
+                        value={purchaseEditForm.notes}
+                        onChange={(e) => setPurchaseEditForm(prev => ({ ...prev, notes: e.target.value }))}
+                        placeholder="Additional purchase notes..."
+                        className="w-full px-2.5 py-1.5 border border-[#c3c4c7] rounded-xs text-xs outline-none focus:border-[#2271b1]"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sticky Footer */}
+              <div className="px-5 py-3 bg-[#f6f7f7] border-t border-[#c3c4c7] flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleRevertPurchase}
+                  disabled={revertingPurchase}
+                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold rounded-xs flex items-center gap-1.5 text-xs transition-colors shadow-2xs disabled:opacity-50"
+                  title="Remove from Shipment and send back to Orders queue as Pending Purchase"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                  <span>{revertingPurchase ? 'Reverting...' : 'Revert to Not Purchased'}</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPurchaseModal(false)}
+                    className="px-4 py-1.5 bg-white hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-semibold rounded-xs transition-colors shadow-xs text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingPurchaseEdit}
+                    className="px-5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold rounded-xs shadow-xs transition-colors flex items-center gap-1.5 text-xs disabled:opacity-50"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{savingPurchaseEdit ? 'Saving...' : 'Save Purchase Changes'}</span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>

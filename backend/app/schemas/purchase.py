@@ -56,8 +56,6 @@ class PurchaseResponse(BaseModel):
     company: Optional[str] = None
     qty: int
     sku: Optional[str] = None
-    gst_type: Optional[str] = "GST"
-    bank: Optional[str] = None
     po_number: Optional[str] = None
     status: str
     created_at: datetime

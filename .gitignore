@@ -47,6 +47,8 @@ crm.db
 backend/crm.db
 
 *.jpg 
+backend/uploads/
+uploads/
 # Environment & secret files
 .env
 .env.local

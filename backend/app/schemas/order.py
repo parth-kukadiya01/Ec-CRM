@@ -76,6 +76,7 @@ class OrderUpdate(BaseModel):
     label_cost_usd: Optional[float] = None
     label_free: Optional[bool] = None
     label_tracking_id: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 class OrderResponse(BaseModel):
     id: int

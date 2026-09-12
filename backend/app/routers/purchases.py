@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -79,8 +79,6 @@ def create_purchase(
         order_date=pur_in.order_date or getattr(order, 'order_process_date', None) or getattr(order, 'order_date', date.today()),
         product_name=pur_in.product_name or order.product_name,
         sku=pur_in.sku,
-        gst_type=pur_in.gst_type or "GST",
-        bank=pur_in.bank,
         po_number=pur_in.po_number,
         purchase_value=pur_in.purchase_value,
         other_cost=pur_in.other_cost or 0.0,
@@ -167,10 +165,6 @@ def update_purchase(
 
     if pur_in.sku is not None:
         purchase.sku = pur_in.sku
-    if pur_in.gst_type is not None:
-        purchase.gst_type = pur_in.gst_type
-    if pur_in.bank is not None:
-        purchase.bank = pur_in.bank
     if pur_in.po_number is not None:
         purchase.po_number = pur_in.po_number
     if pur_in.purchase_value is not None:
@@ -253,6 +247,20 @@ def delete_purchase(
     purchase = db.query(Purchase).filter(Purchase.id == purchase_id).first()
     if not purchase:
         raise HTTPException(status_code=404, detail="Purchase not found")
+
+    order = db.query(Order).filter(Order.id == purchase.order_id).first()
+    if order:
+        other_pur = db.query(Purchase).filter(Purchase.order_id == order.id, Purchase.id != purchase.id).first()
+        if not other_pur:
+            order.purchase_cost_inr = 0.0
+            if order.status in ["Purchase Pending", "In Stock", "Ready to Ship"]:
+                order.status = "Pending"
+            if order.order_status in ["Purchase Pending", "In Stock"]:
+                order.order_status = "Pending"
+            # Bring reverted order to the very top of Orders list
+            order.created_at = datetime.utcnow()
+        else:
+            order.purchase_cost_inr = other_pur.purchase_value or 0.0
 
     db.delete(purchase)
     db.commit()
