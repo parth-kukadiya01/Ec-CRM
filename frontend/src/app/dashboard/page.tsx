@@ -427,8 +427,8 @@ export default function DashboardOverview() {
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.order_process_date || ord.order_date || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold max-w-[220px] truncate" title={ord.product_name}>
-                          <div className="flex items-center gap-2">
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
+                          <div className="flex items-center gap-2 max-w-full overflow-hidden">
                             {ord.product_image ? (
                               /* eslint-disable-next-line @next/next/no-img-element */
                               <img
@@ -444,7 +444,7 @@ export default function DashboardOverview() {
                                 📦
                               </div>
                             )}
-                            <span className="truncate">{ord.product_name}</span>
+                            <span className="truncate min-w-0 flex-1">{ord.product_name}</span>
                           </div>
                         </td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>

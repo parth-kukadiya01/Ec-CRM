@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
 import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
+import BulkUploadOrdersModal from '@/components/BulkUploadOrdersModal';
 import {
   ShoppingCart,
   Plus,
@@ -175,8 +176,9 @@ export default function OrdersPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
 
-  // Alerts for CSV Upload
+  // Alerts for CSV / Bulk Upload
   const [uploadingCsv, setUploadingCsv] = useState(false);
+  const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
   const [csvSuccess, setCsvSuccess] = useState<string | null>(null);
 
@@ -1503,20 +1505,13 @@ export default function OrdersPage() {
           {canEdit && (
             <>
               <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingCsv}
+                onClick={() => setShowBulkUploadModal(true)}
                 className="px-3.5 py-1.5 bg-white border border-[#c3c4c7] hover:bg-[#f0f0f1] text-[#2c3338] text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
+                title="Bulk upload orders via CSV or Excel (.xlsx)"
               >
                 <Upload className="w-4 h-4 text-[#2271b1]" />
-                <span>{uploadingCsv ? 'Importing...' : 'Upload CSV'}</span>
+                <span>Bulk Upload (CSV / Excel)</span>
               </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleCsvFileChange}
-                accept=".csv"
-                className="hidden"
-              />
               <button
                 onClick={openAddModalHandler}
                 className="px-3.5 py-1.5 bg-[#2271b1] hover:bg-[#135e96] text-white text-xs font-bold rounded-sm shadow-xs transition-all flex items-center gap-1.5"
@@ -1801,7 +1796,7 @@ export default function OrdersPage() {
                     {visibleColumns.shipment_id !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>}
                     {visibleColumns.order_number !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
                     {visibleColumns.seller_account !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>}
-                    {visibleColumns.product_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px] max-w-[240px]">Product Name</th>}
+                    {visibleColumns.product_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Product Name</th>}
                     {visibleColumns.qty !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
                     {visibleColumns.price_usd !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Price ($)</th>}
                     {visibleColumns.order_status !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Order Status</th>}
@@ -1858,10 +1853,10 @@ export default function OrdersPage() {
                         )}
                         {visibleColumns.shipment_id !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>}
                         {visibleColumns.order_number !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">{ord.order_number}</td>}
-                        {visibleColumns.seller_account !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium max-w-[150px] truncate">{ord.seller_account || ''}</td>}
+                        {visibleColumns.seller_account !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium truncate" title={ord.seller_account}>{ord.seller_account || ''}</td>}
                         {/* Product Name (handles single & multi-product cleanly) */}
                         {visibleColumns.product_name !== false && (
-                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327] min-w-[200px] max-w-[260px]">
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327]">
                             {(() => {
                               let items: any[] = [];
                               try {
@@ -1875,7 +1870,7 @@ export default function OrdersPage() {
                                 return (
                                   <div className="flex flex-col gap-1.5 py-1">
                                     {items.map((item: any, i: number) => (
-                                      <div key={i} className="flex items-center gap-2">
+                                      <div key={i} className="flex items-center gap-2 max-w-full">
                                         {item.product_image ? (
                                           /* eslint-disable-next-line @next/next/no-img-element */
                                           <img
@@ -1889,20 +1884,20 @@ export default function OrdersPage() {
                                             P{i + 1}
                                           </div>
                                         )}
-                                        <div className="min-w-0 flex-1">
+                                        <div className="min-w-0 flex-1 overflow-hidden">
                                           {item.product_url ? (
                                             <a
                                               href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
                                               target="_blank"
                                               rel="noopener noreferrer"
-                                              className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-[170px]"
+                                              className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-full"
                                               title={item.product_name}
                                             >
                                               <span className="truncate">{item.product_name}</span>
                                               <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
                                             </a>
                                           ) : (
-                                            <span className="font-semibold text-xs truncate block max-w-[170px]" title={item.product_name}>
+                                            <span className="font-semibold text-xs truncate block max-w-full" title={item.product_name}>
                                               {item.product_name}
                                             </span>
                                           )}
@@ -1917,7 +1912,7 @@ export default function OrdersPage() {
                               }
 
                               return (
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 max-w-full overflow-hidden">
                                   {ord.product_image && (
                                     /* eslint-disable-next-line @next/next/no-img-element */
                                     <img
@@ -1934,13 +1929,14 @@ export default function OrdersPage() {
                                       href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
+                                      className="text-[#2271b1] hover:underline inline-flex items-center gap-1 min-w-0 flex-1 truncate font-bold"
+                                      title={ord.product_name}
                                     >
                                       <span className="truncate">{ord.product_name}</span>
                                       <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
                                     </a>
                                   ) : (
-                                    <span className="truncate max-w-[200px]" title={ord.product_name}>{ord.product_name}</span>
+                                    <span className="truncate min-w-0 flex-1" title={ord.product_name}>{ord.product_name}</span>
                                   )}
                                 </div>
                               );
@@ -2045,8 +2041,8 @@ export default function OrdersPage() {
                           </td>
                         )}
                         {visibleColumns.consignee_name !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.consignee_name}>{ord.consignee_name || ord.buyer_name || '—'}</td>}
-                        {visibleColumns.shipment_address_1 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] max-w-[180px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>}
-                        {visibleColumns.shipment_address_2 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate">{ord.shipment_address_2 || '—'}</td>}
+                        {visibleColumns.shipment_address_1 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>}
+                        {visibleColumns.shipment_address_2 !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] text-[#50575e] truncate" title={ord.shipment_address_2}>{ord.shipment_address_2 || '—'}</td>}
                         {visibleColumns.city !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.city || '—'}</td>}
                         {visibleColumns.state !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] uppercase font-bold text-[#50575e] text-center">{ord.state || '—'}</td>}
                         {visibleColumns.zip_code !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-center">{ord.zip_code || '—'}</td>}
@@ -3226,6 +3222,16 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+
+      {/* Bulk Upload Modal */}
+      <BulkUploadOrdersModal
+        isOpen={showBulkUploadModal}
+        onClose={() => setShowBulkUploadModal(false)}
+        onSuccess={(msg) => {
+          setCsvSuccess(msg);
+          loadData(false);
+        }}
+      />
     </div>
   );
 }

@@ -6,8 +6,13 @@ from app.core.deps import get_current_user, check_permission
 from app.models.inventory import Inventory
 from app.models.user import User
 from app.schemas.inventory import InventoryCreate, InventoryUpdate, InventoryResponse
+from app.core.s3 import (
+    upload_base64_or_data_uri_to_s3,
+    delete_file_from_s3,
+    sanitize_folder_name
+)
 
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 
@@ -57,7 +62,10 @@ def create_inventory_item(
     is_partner_user = current_user.is_partner or (current_user.role and current_user.role.name == "Channel Partner")
     if not current_user.is_admin and is_partner_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Channel Partners cannot add or edit inventory items.")
+    
     partner_name = item_in.partner_name
+    partner_folder_label = "general"
+
     if item_in.partner_id:
         partner = db.query(User).filter(User.id == item_in.partner_id, User.is_partner == True).first()
         if not partner:
@@ -68,9 +76,22 @@ def create_inventory_item(
                 detail=f"Cannot add inventory for {partner.full_name or partner.email}. Onboarding stage is currently '{partner.onboarding_status or 'Draft'}'. Onboarding must reach 'Active' first."
             )
         partner_name = f"{partner.full_name or partner.email} ({partner.account_name or 'Store'})"
+        partner_folder_label = partner.account_name or partner.full_name or f"partner_{partner.id}"
+    elif partner_name:
+        partner_folder_label = partner_name
 
     clean_name = item_in.product_name.strip() if item_in.product_name else ""
-    from sqlalchemy import func
+    s3_folder = f"products/partner_{sanitize_folder_name(partner_folder_label)}"
+
+    # If image is base64 data URI, upload to partner folder in S3 immediately
+    image_url = item_in.image_url
+    if image_url and image_url.startswith("data:"):
+        image_url = upload_base64_or_data_uri_to_s3(
+            data_uri=image_url,
+            prefix=s3_folder,
+            fallback_filename=f"{clean_name or 'product'}.png"
+        )
+
     existing = db.query(Inventory).filter(
         func.lower(func.trim(Inventory.product_name)) == clean_name.lower()
     ).first()
@@ -87,8 +108,10 @@ def create_inventory_item(
             existing.category = item_in.category
         if item_in.other_details:
             existing.other_details = item_in.other_details
-        if item_in.image_url:
-            existing.image_url = item_in.image_url
+        if image_url:
+            if existing.image_url and existing.image_url != image_url:
+                delete_file_from_s3(existing.image_url)
+            existing.image_url = image_url
         if item_in.product_url:
             existing.product_url = item_in.product_url
         if item_in.partner_id:
@@ -107,7 +130,7 @@ def create_inventory_item(
         other_details=item_in.other_details,
         partner_id=item_in.partner_id,
         partner_name=partner_name,
-        image_url=item_in.image_url,
+        image_url=image_url,
         product_url=item_in.product_url
     )
     db.add(item)
@@ -129,22 +152,7 @@ def update_inventory_item(
     if not item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
 
-    if item_in.product_name is not None:
-        item.product_name = item_in.product_name
-    if item_in.price is not None:
-        item.price = item_in.price
-    if item_in.stock_quantity is not None:
-        item.stock_quantity = item_in.stock_quantity
-    if item_in.sku is not None:
-        item.sku = item_in.sku
-    if item_in.category is not None:
-        item.category = item_in.category
-    if item_in.other_details is not None:
-        item.other_details = item_in.other_details
-    if item_in.image_url is not None:
-        item.image_url = item_in.image_url
-    if item_in.product_url is not None:
-        item.product_url = item_in.product_url
+    partner_folder_label = item.partner_name or "general"
 
     if item_in.partner_id is not None:
         if item_in.partner_id == 0 or item_in.partner_id is None:
@@ -161,8 +169,40 @@ def update_inventory_item(
                 )
             item.partner_id = partner.id
             item.partner_name = f"{partner.full_name or partner.email} ({partner.account_name or 'Store'})"
+            partner_folder_label = partner.account_name or partner.full_name or f"partner_{partner.id}"
     elif item_in.partner_name is not None:
         item.partner_name = item_in.partner_name
+        partner_folder_label = item_in.partner_name
+
+    s3_folder = f"products/partner_{sanitize_folder_name(partner_folder_label)}"
+
+    if item_in.product_name is not None:
+        item.product_name = item_in.product_name
+    if item_in.price is not None:
+        item.price = item_in.price
+    if item_in.stock_quantity is not None:
+        item.stock_quantity = item_in.stock_quantity
+    if item_in.sku is not None:
+        item.sku = item_in.sku
+    if item_in.category is not None:
+        item.category = item_in.category
+    if item_in.other_details is not None:
+        item.other_details = item_in.other_details
+
+    if item_in.image_url is not None:
+        new_image_url = item_in.image_url
+        if new_image_url and new_image_url.startswith("data:"):
+            new_image_url = upload_base64_or_data_uri_to_s3(
+                data_uri=new_image_url,
+                prefix=s3_folder,
+                fallback_filename=f"{item.product_name or 'product'}.png"
+            )
+        if item.image_url and item.image_url != new_image_url:
+            delete_file_from_s3(item.image_url)
+        item.image_url = new_image_url
+
+    if item_in.product_url is not None:
+        item.product_url = item_in.product_url
 
     db.commit()
     db.refresh(item)
@@ -177,9 +217,13 @@ def delete_inventory_item(
     is_partner_user = current_user.is_partner or (current_user.role and current_user.role.name == "Channel Partner")
     if not current_user.is_admin and is_partner_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Channel Partners cannot delete inventory items.")
+
     item = db.query(Inventory).filter(Inventory.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
+
+    if item.image_url:
+        delete_file_from_s3(item.image_url)
 
     db.delete(item)
     db.commit()

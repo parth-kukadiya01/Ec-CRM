@@ -3,9 +3,9 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useState } from 'react';
-import { inventoryApi, authApi, usersApi } from '@/lib/api';
+import { inventoryApi, authApi, usersApi, uploadApi } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
-import { Package, Plus, Search, Edit2, Trash2, AlertCircle, ShieldAlert, Store, CheckCircle2, Filter, Upload, Image as ImageIcon, Link as LinkIcon, Paperclip, ExternalLink } from 'lucide-react';
+import { Package, Plus, Search, Edit2, Trash2, AlertCircle, ShieldAlert, Store, CheckCircle2, Filter, Upload, Image as ImageIcon, Link as LinkIcon, Paperclip, ExternalLink, Loader2 } from 'lucide-react';
 import { hasPermission } from '@/lib/permissions';
 
 export default function InventoryPage() {
@@ -107,14 +107,30 @@ export default function InventoryPage() {
     setShowModal(true);
   };
 
-  const handleImageFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const handleImageFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData((prev) => ({ ...prev, image_url: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    try {
+      setUploadingImage(true);
+      const selectedPartner = partners.find((p) => String(p.id) === String(formData.partner_id));
+      const partnerName = selectedPartner?.full_name || selectedPartner?.account_name || '';
+
+      const res = await uploadApi.uploadFile(file, {
+        partner: partnerName || (isPartner ? currentUser?.account_name || currentUser?.full_name : undefined),
+        folder: partnerName ? `products/partner_${partnerName.replace(/\s+/g, '_')}` : 'products/general',
+      });
+
+      if (res.data?.file_url) {
+        setFormData((prev) => ({ ...prev, image_url: res.data.file_url }));
+      }
+    } catch (err: any) {
+      console.error('Image upload failed', err);
+      alert('Failed to upload image to S3: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -417,12 +433,13 @@ export default function InventoryPage() {
                   )}
 
                   <div className="flex-1 space-y-2">
-                    <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl border border-blue-200 transition-all">
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload Local Image File</span>
+                    <label className={`cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 ${uploadingImage ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-50 hover:bg-blue-100 text-blue-700'} text-xs font-bold rounded-xl border border-blue-200 transition-all`}>
+                      {uploadingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> : <Upload className="w-3.5 h-3.5" />}
+                      <span>{uploadingImage ? 'Uploading to S3...' : 'Upload Image (To Partner Folder)'}</span>
                       <input
                         type="file"
                         accept="image/*"
+                        disabled={uploadingImage}
                         className="hidden"
                         onChange={handleImageFileSelect}
                       />

@@ -95,6 +95,8 @@ def update_document(
     return doc
 
 
+from app.core.s3 import delete_file_from_s3
+
 @router.delete("/{document_id}")
 def delete_document(
     user_id: int,
@@ -114,6 +116,10 @@ def delete_document(
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    if doc.file_url:
+        delete_file_from_s3(doc.file_url)
+
     db.delete(doc)
     db.commit()
     return {"message": "Document deleted"}

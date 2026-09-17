@@ -1,10 +1,19 @@
 import os
+import io
+import csv
+import json
+import re
 import random
 import string
 from datetime import datetime, date
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
 from app.database import get_db
 from app.core.deps import get_current_user, check_permission
 from app.models.order import Order
@@ -770,15 +779,24 @@ def download_order_label(
 
 
 
-def parse_date_flexible(val: Optional[str]) -> Optional[date]:
-    if not val or not str(val).strip():
+def parse_date_flexible(val: Any) -> Optional[date]:
+    if val is None:
         return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
     cleaned = str(val).strip()
+    if not cleaned or cleaned.lower() in ["none", "null", "—", "-", "n/a"]:
+        return None
+    if cleaned.endswith(" 00:00:00"):
+        cleaned = cleaned[:-9].strip()
     for fmt in [
         "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%m-%d-%Y",
         "%d/%m/%Y", "%d-%m-%Y", "%b %d %Y", "%b %d, %Y",
         "%B %d %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y",
-        "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S"
+        "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+        "%d.%m.%Y", "%Y.%m.%d"
     ]:
         try:
             return datetime.strptime(cleaned, fmt).date()
@@ -786,196 +804,726 @@ def parse_date_flexible(val: Optional[str]) -> Optional[date]:
             pass
     return None
 
-def normalize_key(k: str) -> str:
+def normalize_key(k: Any) -> str:
     return re.sub(r'[^a-z0-9]', '', str(k).lower().strip())
 
+def parse_file_rows(filename: str, content_bytes: bytes) -> List[List[str]]:
+    fname = filename.lower()
+    if fname.endswith(".csv"):
+        text = ""
+        for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+            try:
+                text = content_bytes.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not decode CSV file. Please upload a valid UTF-8 CSV.")
+        reader = csv.reader(io.StringIO(text))
+        rows = []
+        for r in reader:
+            rows.append([str(c).strip() for c in r])
+        return rows
+    elif fname.endswith(".xlsx") or fname.endswith(".xls"):
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content_bytes), data_only=True)
+            sheet = wb.active
+            rows = []
+            for row in sheet.iter_rows(values_only=True):
+                row_vals = []
+                for val in row:
+                    if val is None:
+                        row_vals.append("")
+                    elif isinstance(val, (datetime, date)):
+                        row_vals.append(val.strftime("%Y-%m-%d"))
+                    elif isinstance(val, float) and val.is_integer():
+                        row_vals.append(str(int(val)))
+                    else:
+                        row_vals.append(str(val).strip())
+                rows.append(row_vals)
+            return rows
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not read Excel file: {str(e)}")
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a valid .csv, .xlsx, or .xls file."
+        )
+
+KEY_MAPPINGS = {
+    "order_number": ["ordernumber", "orderid", "orderno", "order", "ordernum", "amazonorderid", "id", "orderidentifier"],
+    "order_process_date": ["orderprocessdate", "processdate", "orderdate", "date", "purchasedate", "orderprocesseddate"],
+    "shipping_date": ["shippingdate", "shipdate", "dateshipped", "dispatcheddate", "shipmentdate"],
+    "last_delivery_date": ["lastdeliverydate", "deliverydate", "deliverby", "latestdeliverydate", "expecteddeliverydate", "maxdeliverydate"],
+    "arriving_date": ["arrivingdate", "arrivaldate", "estimatedarrival", "expectedarrivaldate"],
+    "company": ["company", "companyname", "sourcingagent", "client", "person"],
+    "shipment_id": ["shipmentid", "shipmentnumber", "shipmentno", "awb", "trackingid", "shipmentcode"],
+    "seller_account": ["selleraccount", "seller", "store", "account", "sellername", "merchant", "storeaccount"],
+    "product_name": ["productname", "product", "title", "itemname", "item", "description", "producttitle"],
+    "product_url": ["producturl", "url", "link", "itemurl", "asinurl", "productlink"],
+    "product_image": ["productimage", "image", "imageurl", "img", "photourl"],
+    "qty": ["qty", "quantity", "quantitypurchased", "units", "count", "itemqty"],
+    "price_usd": ["priceusd", "price", "productprice", "itemprice", "unitprice", "amount", "totalprice", "itemsubtotal", "saleamount"],
+    "order_status": ["orderstatus", "carrierstatus", "stockstatus", "status"],
+    "consignee_name": ["consigneename", "consignee", "buyername", "buyer", "customername", "customer", "recipientname", "recipient", "name"],
+    "shipment_address_1": ["shipmentaddress1", "address1", "shipaddress1", "streetaddress", "address", "street", "addressline1"],
+    "shipment_address_2": ["shipmentaddress2", "address2", "shipaddress2", "apartment", "suite", "unit", "addressline2"],
+    "city": ["city", "shipcity", "destinationcity"],
+    "state": ["state", "shipstate", "destinationstate", "province", "region"],
+    "zip_code": ["zipcode", "zip", "shipzip", "postalcode", "pincode", "postcode"],
+    "mobile_number": ["mobilenumber", "mobile", "phone", "phonenumber", "shipphone", "contactnumber", "contactphone"],
+    "country": ["country", "shipcountry", "destinationcountry"],
+    "purchase_cost_inr": ["purchasecostinr", "purchasecost", "cost", "cogs", "itemcost"],
+    "shipment_cost": ["shipmentcost", "shippingcost", "shippingfee", "deliverycost"],
+}
+
+SAMPLE_HEADERS = [
+    "Order ID",
+    "Order Process Date",
+    "Shipping Date",
+    "Last Delivery Date",
+    "Arriving Date",
+    "Company / Person",
+    "Shipment ID",
+    "Seller Account",
+    "Product Name",
+    "Product URL",
+    "Product Image URL",
+    "Qty",
+    "Price ($)",
+    "Order Status",
+    "Consignee Name",
+    "Address Line 1",
+    "Address Line 2",
+    "City",
+    "State",
+    "Zip Code",
+    "Contact Number",
+    "Country",
+    "Purchase Cost (INR)",
+    "Shipment Cost"
+]
+
+SAMPLE_DATA_ROWS = [
+    [
+        "114-1029384-5928173",
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        "ADBH",
+        "INBTL001",
+        "Store US #1",
+        "Sea Buckthorn Berry Juice 500ml",
+        "https://example.com/product/sea-buckthorn",
+        "",
+        "1",
+        "34.99",
+        "ADBH",
+        "John Doe",
+        "123 Maple Street",
+        "Apt 4B",
+        "New York",
+        "NY",
+        "10001",
+        "+1 555-0199",
+        "USA",
+        "1250.00",
+        "15.00"
+    ],
+    [
+        "114-5544332-2211009",
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        "Vetai",
+        "INBTL002",
+        "Store US #2",
+        "Organic Vitamin C Serum 30ml | Hydrating Hyaluronic Cream 50g",
+        "https://example.com/product/serum | https://example.com/product/cream",
+        "",
+        "2 | 1",
+        "19.99 | 24.50",
+        "ADBH",
+        "Alice Smith",
+        "456 Oak Avenue",
+        "Suite 100",
+        "Chicago",
+        "IL",
+        "60601",
+        "+1 555-0188",
+        "USA",
+        "1450.00",
+        "12.00"
+    ],
+    [
+        "114-8849201-9482019",
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        "Globle",
+        "INBTL003",
+        "Store US #3",
+        "Natural Tea Tree Face Wash 150ml",
+        "https://example.com/product/face-wash",
+        "",
+        "2",
+        "18.00",
+        "ADBH",
+        "Sarah Connor",
+        "742 Evergreen Terrace",
+        "",
+        "Los Angeles",
+        "CA",
+        "90001",
+        "+1 555-0144",
+        "USA",
+        "700.00",
+        "10.00"
+    ],
+    [
+        "114-8849201-9482019",
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        date.today().strftime("%Y-%m-%d"),
+        "Globle",
+        "INBTL003",
+        "Store US #3",
+        "Purifying Charcoal Clay Mask 100g",
+        "https://example.com/product/clay-mask",
+        "",
+        "1",
+        "22.50",
+        "ADBH",
+        "Sarah Connor",
+        "742 Evergreen Terrace",
+        "",
+        "Los Angeles",
+        "CA",
+        "90001",
+        "+1 555-0144",
+        "USA",
+        "800.00",
+        "0.00"
+    ]
+]
+
+@router.get("/sample-template")
+def download_sample_template(
+    format: str = Query("csv", pattern="^(csv|xlsx)$"),
+    current_user: User = Depends(check_permission("orders:read"))
+):
+    if format == "csv":
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(SAMPLE_HEADERS)
+        for row in SAMPLE_DATA_ROWS:
+            writer.writerow(row)
+        csv_bytes = out.getvalue().encode("utf-8-sig")
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=orders_sample_template.csv",
+                "Access-Control-Expose-Headers": "Content-Disposition"
+            }
+        )
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Orders Import Template"
+
+        # Styles
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        regular_font = Font(name="Calibri", size=11)
+        note_font = Font(name="Calibri", size=10, italic=True, color="64748B")
+        thin_border = Border(
+            left=Side(style='thin', color='CBD5E1'),
+            right=Side(style='thin', color='CBD5E1'),
+            top=Side(style='thin', color='CBD5E1'),
+            bottom=Side(style='thin', color='CBD5E1')
+        )
+
+        ws.append(SAMPLE_HEADERS)
+
+        for col_idx in range(1, len(SAMPLE_HEADERS) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+        for row_idx, row_data in enumerate(SAMPLE_DATA_ROWS, start=2):
+            ws.append(row_data)
+            for col_idx in range(1, len(row_data) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = regular_font
+                cell.border = thin_border
+                if col_idx in [12]: # Qty
+                    cell.alignment = Alignment(horizontal="center")
+                elif col_idx in [13, 23, 24]: # Prices
+                    cell.alignment = Alignment(horizontal="right")
+
+        # Instructions sheet
+        ws_info = wb.create_sheet(title="Import Guide & Rules")
+        ws_info.column_dimensions['A'].width = 30
+        ws_info.column_dimensions['B'].width = 75
+
+        info_headers = ["Field / Rule", "Description & Required Format"]
+        ws_info.append(info_headers)
+        ws_info.cell(row=1, column=1).font = header_font
+        ws_info.cell(row=1, column=1).fill = header_fill
+        ws_info.cell(row=1, column=2).font = header_font
+        ws_info.cell(row=1, column=2).fill = header_fill
+
+        rules = [
+            ("Order ID (Required)", "Unique Order ID (e.g. 114-1029384-5928173). Required on every row."),
+            ("Multi-Product Orders", "To create a multi-item order, put multiple rows with the SAME Order ID. They will be combined into a single order with individual product items."),
+            ("Product Name (Required)", "Name/title of the product. Cannot be empty."),
+            ("Qty (Required)", "Integer quantity >= 1 (e.g. 1, 2, 5)."),
+            ("Price ($) (Required)", "Sale price in USD (e.g. 29.99, 15.00). Must be non-negative."),
+            ("Date Fields", "Order Process Date, Shipping Date, Last Delivery Date, Arriving Date. Expected format: YYYY-MM-DD or DD/MM/YYYY."),
+            ("Company / Person", "Must match your allowed company (e.g. ADBH, Vetai, Globle)."),
+            ("Atomic Validation", "All rows are validated strictly. If any row has a missing required field or error, the whole file is rejected with clear error details."),
+        ]
+
+        for r_idx, (k, v) in enumerate(rules, start=2):
+            ws_info.append([k, v])
+            ws_info.cell(row=r_idx, column=1).font = Font(bold=True)
+            ws_info.cell(row=r_idx, column=1).border = thin_border
+            ws_info.cell(row=r_idx, column=2).border = thin_border
+
+        # Adjust column widths in main sheet
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val_str = str(cell.value or "")
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+        ws.row_dimensions[1].height = 28
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": "attachment; filename=orders_sample_template.xlsx",
+                "Access-Control-Expose-Headers": "Content-Disposition"
+            }
+        )
+
+@router.post("/upload-bulk-file")
 @router.post("/upload-csv")
-async def upload_orders_csv(
+async def upload_bulk_orders_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(check_permission("orders:write"))
 ):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files (.csv) are supported")
-
     content_bytes = await file.read()
-    
-    text = ""
-    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
-        try:
-            text = content_bytes.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-            
-    if not text:
-        raise HTTPException(status_code=400, detail="Could not decode CSV file. Please upload a valid UTF-8 CSV.")
+    if not content_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if not rows or len(rows) < 2:
-        raise HTTPException(status_code=400, detail="CSV file is empty or missing data rows.")
-
-    header_row = rows[0]
-    header_indices = {}
+    rows = parse_file_rows(file.filename, content_bytes)
     
-    KEY_MAPPINGS = {
-        "order_number": ["ordernumber", "orderid", "orderno", "order", "ordernum", "amazonorderid", "id"],
-        "order_process_date": ["orderprocessdate", "processdate", "orderdate", "date", "purchasedate"],
-        "last_delivery_date": ["lastdeliverydate", "deliverydate", "deliverby", "latestdeliverydate", "expecteddeliverydate"],
-        "shipping_date": ["shippingdate", "shipdate", "dateshipped", "dispatcheddate"],
-        "company": ["company", "companyname", "sourcingagent"],
-        "shipment_id": ["shipmentid", "shipmentnumber", "shipmentno", "awb", "trackingid"],
-        "seller_account": ["selleraccount", "seller", "store", "account", "sellername", "merchant"],
-        "product_name": ["productname", "product", "title", "itemname", "item", "description"],
-        "product_url": ["producturl", "url", "link", "itemurl", "asinurl"],
-        "product_image": ["productimage", "image", "imageurl", "img"],
-        "qty": ["qty", "quantity", "quantitypurchased", "units", "count"],
-        "price_usd": ["priceusd", "price", "productprice", "itemprice", "unitprice", "amount", "totalprice", "itemsubtotal"],
-        "order_status": ["orderstatus", "carrierstatus", "stockstatus"],
-        "p": ["p", "pflag", "priority"],
-        "gst": ["gst", "gstname", "tax", "gsttype"],
-        "consignee_name": ["consigneename", "consignee", "buyername", "buyer", "customername", "customer", "recipientname", "recipient", "name"],
-        "shipment_address_1": ["shipmentaddress1", "address1", "shipaddress1", "streetaddress", "address", "street"],
-        "shipment_address_2": ["shipmentaddress2", "address2", "shipaddress2", "apartment", "suite", "unit"],
-        "city": ["city", "shipcity", "destinationcity"],
-        "state": ["state", "shipstate", "destinationstate", "province", "region"],
-        "zip_code": ["zipcode", "zip", "shipzip", "postalcode", "pincode"],
-        "mobile_number": ["mobilenumber", "mobile", "phone", "phonenumber", "shipphone", "contactnumber"],
-        "country": ["country", "shipcountry", "destinationcountry"],
-        "status": ["status", "fulfillmentstatus"],
-        "delivery_service": ["deliveryservice", "shippingpartner", "carrier", "shippingcarrier"],
-        "shipment_cost": ["shipmentcost", "shippingcost", "shippingfee"],
-        "purchase_cost_inr": ["purchasecostinr", "purchasecost", "cost", "cogs"],
-        "oi": ["oi", "deliverycode", "purchasedeliverycode"],
-        "arriving_date": ["arrivingdate", "arrivaldate", "estimatedarrival"]
-    }
+    # Filter out empty rows
+    data_rows = []
+    for r in rows:
+        if any(str(c).strip() for c in r):
+            data_rows.append(r)
+
+    if not data_rows or len(data_rows) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file contains no data rows. Please ensure the first row has column headers and subsequent rows have order data."
+        )
+
+    header_row = data_rows[0]
+    header_indices: dict[str, int] = {}
 
     for idx, col in enumerate(header_row):
         norm = normalize_key(col)
         for std_key, aliases in KEY_MAPPINGS.items():
             if norm in aliases or norm == std_key:
-                header_indices[std_key] = idx
+                if std_key not in header_indices:
+                    header_indices[std_key] = idx
                 break
 
-    imported_orders = []
-    skipped_count = 0
-    months = set()
-    
+    # Verify essential columns exist in headers
+    missing_required_headers = []
+    if "order_number" not in header_indices:
+        missing_required_headers.append("Order ID (or Order Number)")
+    if "product_name" not in header_indices:
+        missing_required_headers.append("Product Name")
+
+    if missing_required_headers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Required column header(s) missing: {', '.join(missing_required_headers)}. Please download the sample template for the correct header format."
+        )
+
+    allowed_comps = get_user_allowed_companies(current_user)
     acc_id = current_user.account_id if not current_user.is_admin else None
     acc_name = current_user.account_name if not current_user.is_admin else None
 
-    for row_idx, row in enumerate(rows[1:], start=2):
-        if not any(row):
-            continue
+    # Strict Validation Collection
+    validation_errors: List[str] = []
+    
+    # Group rows by order_number
+    # Format: { order_number: [ { "row_idx": int, "data": dict }, ... ] }
+    grouped_orders: dict[str, List[dict]] = {}
+    
+    # Track order numbers seen in file to catch duplicate IDs in DB
+    existing_db_orders = set()
+    order_numbers_in_file = set()
 
-        def get_val(key: str, default=None):
+    for row_idx, row in enumerate(data_rows[1:], start=2):
+        def get_val(key: str, default="") -> str:
             idx = header_indices.get(key)
             if idx is not None and idx < len(row):
-                val = row[idx].strip()
+                val = str(row[idx]).strip()
                 return val if val else default
             return default
 
-        order_num = get_val("order_number")
-        if not order_num:
-            order_num = f"ORD-{datetime.utcnow().strftime('%Y%m%d')}-{random.randint(10000, 99999)}"
-
-        existing = db.query(Order).filter(Order.order_number == order_num).first()
-        if existing:
-            skipped_count += 1
+        raw_order_num = get_val("order_number")
+        if not raw_order_num:
+            validation_errors.append(f"Row {row_idx}: 'Order ID' is missing or empty.")
             continue
 
-        product_name = get_val("product_name", f"Imported Item #{row_idx}")
-        consignee_name = get_val("consignee_name", "Valued Consignee")
-        
+        raw_product_name = get_val("product_name")
+        if not raw_product_name:
+            validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Product Name' is required.")
+            continue
+
+        product_parts = [p.strip() for p in re.split(r'\||\r?\n', raw_product_name) if p.strip()]
+
+        # Validate Optional Costs
+        raw_purchase_cost = get_val("purchase_cost_inr", "0")
         try:
-            qty = int(float(get_val("qty", "1") or 1))
+            purchase_cost_val = float(str(raw_purchase_cost).replace("₹", "").replace(",", "").strip())
+            if purchase_cost_val < 0:
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Purchase Cost' cannot be negative (got '{raw_purchase_cost}').")
         except (ValueError, TypeError):
-            qty = 1
-            
+            validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Purchase Cost' must be a valid number (got '{raw_purchase_cost}').")
+            purchase_cost_val = 0.0
+
+        raw_shipment_cost = get_val("shipment_cost", "0")
         try:
-            price_usd = float(get_val("price_usd", "0") or 0)
+            shipment_cost_val = float(str(raw_shipment_cost).replace("$", "").replace(",", "").strip())
+            if shipment_cost_val < 0:
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Shipment Cost' cannot be negative (got '{raw_shipment_cost}').")
         except (ValueError, TypeError):
-            price_usd = 0.0
+            validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Shipment Cost' must be a valid number (got '{raw_shipment_cost}').")
+            shipment_cost_val = 0.0
 
-        try:
-            p_cost = float(get_val("purchase_cost_inr", "0") or 0)
-        except (ValueError, TypeError):
-            p_cost = 0.0
+        # Validate Dates
+        raw_process_date = get_val("order_process_date")
+        process_date = None
+        if raw_process_date:
+            process_date = parse_date_flexible(raw_process_date)
+            if not process_date:
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): Invalid 'Order Process Date' ('{raw_process_date}'). Expected YYYY-MM-DD or DD/MM/YYYY.")
+        else:
+            process_date = date.today()
 
-        try:
-            s_cost = float(get_val("shipment_cost", "0") or 0)
-        except (ValueError, TypeError):
-            s_cost = 0.0
+        raw_shipping_date = get_val("shipping_date")
+        shipping_date = None
+        if raw_shipping_date:
+            shipping_date = parse_date_flexible(raw_shipping_date)
+            if not shipping_date:
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): Invalid 'Shipping Date' ('{raw_shipping_date}'). Expected YYYY-MM-DD or DD/MM/YYYY.")
 
-        p_flag_str = str(get_val("p", "false")).lower()
-        p_flag = p_flag_str in ["true", "1", "yes", "y", "t"]
+        raw_last_delivery = get_val("last_delivery_date")
+        last_delivery_date = None
+        if raw_last_delivery:
+            last_delivery_date = parse_date_flexible(raw_last_delivery)
+            if not last_delivery_date:
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): Invalid 'Last Delivery Date' ('{raw_last_delivery}'). Expected YYYY-MM-DD or DD/MM/YYYY.")
 
-        process_date = parse_date_flexible(get_val("order_process_date")) or date.today()
-        delivery_date = parse_date_flexible(get_val("last_delivery_date"))
-        ship_date = parse_date_flexible(get_val("shipping_date"))
+        raw_arriving_date = get_val("arriving_date")
+        arriving_date = None
+        if raw_arriving_date:
+            arriving_date = parse_date_flexible(raw_arriving_date)
+            if not arriving_date and not (len(raw_arriving_date) <= 30 and ("-" in raw_arriving_date or "/" in raw_arriving_date)):
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): Invalid 'Arriving Date' ('{raw_arriving_date}'). Expected YYYY-MM-DD or DD/MM/YYYY.")
 
-        seller_acc = get_val("seller_account", acc_name or "")
+        # Validate Company Authorization
         company = get_val("company", "ADBH")
-        shipment_num = get_val("shipment_id") or get_next_shipment_id(db, offset=len(imported_orders))
-        product_url = get_val("product_url")
+        if allowed_comps:
+            comp_clean = company.strip().lower()
+            if comp_clean and not any(c.lower() in comp_clean for c in allowed_comps):
+                validation_errors.append(
+                    f"Row {row_idx} (Order ID '{raw_order_num}'): Not authorized to create orders for company '{company}'. Allowed: {', '.join(allowed_comps)}."
+                )
 
-        inventory_item = get_or_create_inventory_item(
-            db=db,
-            product_name=product_name,
-            price_usd=price_usd,
-            seller_account=seller_acc or company,
-            image_url=product_image,
-            product_url=product_url
+        order_numbers_in_file.add(raw_order_num)
+
+        # Check if single row has multiple products (e.g. "Product A | Product B" or separated by newlines)
+        if len(product_parts) > 1:
+            raw_qty_str = get_val("qty", "1")
+            qty_parts = [q.strip() for q in re.split(r'\||\r?\n', raw_qty_str) if q.strip()]
+            raw_price_str = get_val("price_usd", "0")
+            price_parts = [p.strip() for p in re.split(r'\||\r?\n', raw_price_str) if p.strip()]
+            url_parts = [u.strip() for u in re.split(r'\||\r?\n', get_val("product_url")) if u.strip()]
+            img_parts = [img.strip() for img in re.split(r'\||\r?\n', get_val("product_image")) if img.strip()]
+
+            for p_idx, p_name in enumerate(product_parts):
+                # Qty for sub-product
+                if p_idx < len(qty_parts):
+                    cur_qty_str = qty_parts[p_idx]
+                elif len(qty_parts) == 1:
+                    cur_qty_str = qty_parts[0]
+                else:
+                    cur_qty_str = "1"
+
+                try:
+                    p_qty_val = int(float(cur_qty_str))
+                    if p_qty_val < 1:
+                        validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}', Product #{p_idx+1} '{p_name}'): 'Qty' must be at least 1 (got '{cur_qty_str}').")
+                except (ValueError, TypeError):
+                    validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}', Product #{p_idx+1} '{p_name}'): 'Qty' must be a valid integer (got '{cur_qty_str}').")
+                    p_qty_val = 1
+
+                # Price for sub-product
+                if p_idx < len(price_parts):
+                    cur_price_str = price_parts[p_idx]
+                elif len(price_parts) == 1 and p_idx == 0:
+                    cur_price_str = price_parts[0]
+                else:
+                    cur_price_str = "0.0"
+
+                try:
+                    p_price_val = float(str(cur_price_str).replace("$", "").replace(",", "").strip())
+                    if p_price_val < 0:
+                        validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}', Product #{p_idx+1} '{p_name}'): 'Price ($)' cannot be negative (got '{cur_price_str}').")
+                except (ValueError, TypeError):
+                    validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}', Product #{p_idx+1} '{p_name}'): 'Price ($)' must be a valid numeric amount (got '{cur_price_str}').")
+                    p_price_val = 0.0
+
+                p_url = url_parts[p_idx] if p_idx < len(url_parts) else (url_parts[0] if len(url_parts) == 1 else "")
+                p_img = img_parts[p_idx] if p_idx < len(img_parts) else (img_parts[0] if len(img_parts) == 1 else "")
+
+                sub_item = {
+                    "row_idx": row_idx,
+                    "order_number": raw_order_num,
+                    "order_process_date": process_date,
+                    "shipping_date": shipping_date,
+                    "last_delivery_date": last_delivery_date,
+                    "arriving_date": raw_arriving_date,
+                    "company": company,
+                    "shipment_id": get_val("shipment_id"),
+                    "seller_account": get_val("seller_account", acc_name or ""),
+                    "product_name": p_name,
+                    "product_url": p_url,
+                    "product_image": p_img,
+                    "qty": p_qty_val,
+                    "price_usd": p_price_val,
+                    "order_status": get_val("order_status", "ADBH"),
+                    "consignee_name": get_val("consignee_name", "Consignee"),
+                    "shipment_address_1": get_val("shipment_address_1"),
+                    "shipment_address_2": get_val("shipment_address_2"),
+                    "city": get_val("city"),
+                    "state": get_val("state"),
+                    "zip_code": get_val("zip_code"),
+                    "mobile_number": get_val("mobile_number"),
+                    "country": get_val("country", "USA"),
+                    "purchase_cost_inr": purchase_cost_val if p_idx == 0 else 0.0,
+                    "shipment_cost": shipment_cost_val if p_idx == 0 else 0.0
+                }
+
+                if raw_order_num not in grouped_orders:
+                    grouped_orders[raw_order_num] = []
+                grouped_orders[raw_order_num].append(sub_item)
+
+        else:
+            # Single product in row
+            raw_qty = get_val("qty", "1")
+            try:
+                qty_val = int(float(raw_qty))
+                if qty_val < 1:
+                    validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Qty' must be at least 1 (got '{raw_qty}').")
+            except (ValueError, TypeError):
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Qty' must be a valid integer (got '{raw_qty}').")
+                qty_val = 1
+
+            raw_price = get_val("price_usd", "0")
+            try:
+                price_val = float(str(raw_price).replace("$", "").replace(",", "").strip())
+                if price_val < 0:
+                    validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Price ($)' cannot be negative (got '{raw_price}').")
+            except (ValueError, TypeError):
+                validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Price ($)' must be a valid numeric amount (got '{raw_price}').")
+                price_val = 0.0
+
+            row_item = {
+                "row_idx": row_idx,
+                "order_number": raw_order_num,
+                "order_process_date": process_date,
+                "shipping_date": shipping_date,
+                "last_delivery_date": last_delivery_date,
+                "arriving_date": raw_arriving_date,
+                "company": company,
+                "shipment_id": get_val("shipment_id"),
+                "seller_account": get_val("seller_account", acc_name or ""),
+                "product_name": product_parts[0],
+                "product_url": get_val("product_url"),
+                "product_image": get_val("product_image"),
+                "qty": qty_val,
+                "price_usd": price_val,
+                "order_status": get_val("order_status", "ADBH"),
+                "consignee_name": get_val("consignee_name", "Consignee"),
+                "shipment_address_1": get_val("shipment_address_1"),
+                "shipment_address_2": get_val("shipment_address_2"),
+                "city": get_val("city"),
+                "state": get_val("state"),
+                "zip_code": get_val("zip_code"),
+                "mobile_number": get_val("mobile_number"),
+                "country": get_val("country", "USA"),
+                "purchase_cost_inr": purchase_cost_val,
+                "shipment_cost": shipment_cost_val
+            }
+
+            if raw_order_num not in grouped_orders:
+                grouped_orders[raw_order_num] = []
+            grouped_orders[raw_order_num].append(row_item)
+
+    # Check for existing duplicate Order IDs in database
+    if order_numbers_in_file:
+        existing_orders = db.query(Order.order_number).filter(Order.order_number.in_(list(order_numbers_in_file))).all()
+        for (exist_num,) in existing_orders:
+            first_row_idx = grouped_orders[exist_num][0]["row_idx"] if exist_num in grouped_orders else "Unknown"
+            validation_errors.append(f"Row {first_row_idx}: Order ID '{exist_num}' already exists in the system. Duplicate order IDs are not allowed.")
+
+    # ZERO TOLERANCE: If ANY error occurred, abort entire transaction and return errors
+    if validation_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": f"Validation failed with {len(validation_errors)} error(s). No orders were processed.",
+                "error_count": len(validation_errors),
+                "errors": validation_errors
+            }
         )
 
-        order = Order(
-            order_number=order_num,
-            order_process_date=process_date,
-            last_delivery_date=delivery_date,
-            shipping_date=ship_date,
-            company=company,
-            shipment_id=shipment_num,
-            seller_account=seller_acc,
-            product_id=inventory_item.id if inventory_item else None,
-            product_name=product_name,
-            product_url=product_url or (inventory_item.product_url if inventory_item else None),
-            product_image=product_image or (inventory_item.image_url if inventory_item else None),
-            qty=qty,
-            product_price=price_usd,
-            order_status=get_val("order_status", "ADBH"),
-            purchase_cost_inr=p_cost,
-            arriving_date=get_val("arriving_date"),
-            consignee_name=consignee_name or "Consignee",
-            shipment_address_1=get_val("shipment_address_1", "") or "",
-            shipment_address_2=get_val("shipment_address_2", "") or "",
-            city=get_val("city", "") or "",
-            state=get_val("state", "") or "",
-            zip_code=get_val("zip_code", "") or "",
-            mobile_number=get_val("mobile_number", "") or "",
-            country=get_val("country", "USA") or "USA",
-            account_id=acc_id,
-            account_name=acc_name,
-            status=get_val("status", ""),
-            delivery_service=get_val("delivery_service"),
-            shipment_cost=s_cost
+    # All validations passed! Proceed with atomic creation
+    created_orders = []
+    total_items_count = 0
+    months_to_sync = set()
+
+    try:
+        for order_num, items in grouped_orders.items():
+            first_item = items[0]
+            total_qty = sum(it["qty"] for it in items)
+            total_price = sum(it["price_usd"] for it in items)
+            total_purchase_cost = sum(it["purchase_cost_inr"] for it in items)
+            total_shipment_cost = max(it["shipment_cost"] for it in items)
+            total_items_count += len(items)
+
+            # Combined product name
+            combined_product_name = " | ".join(it["product_name"] for it in items)
+
+            # Build product_items array
+            product_items_list = []
+            primary_inv_id = None
+            primary_image = first_item["product_image"]
+            primary_url = first_item["product_url"]
+
+            for it in items:
+                inv = get_or_create_inventory_item(
+                    db=db,
+                    product_name=it["product_name"],
+                    price_usd=it["price_usd"],
+                    seller_account=it["seller_account"] or it["company"],
+                    image_url=it["product_image"],
+                    product_url=it["product_url"]
+                )
+                if inv and primary_inv_id is None:
+                    primary_inv_id = inv.id
+                
+                it_image = it["product_image"] or (inv.image_url if inv else None)
+                it_url = it["product_url"] or (inv.product_url if inv else None)
+                
+                if not primary_image and it_image:
+                    primary_image = it_image
+                if not primary_url and it_url:
+                    primary_url = it_url
+
+                product_items_list.append({
+                    "product_id": inv.id if inv else None,
+                    "product_name": it["product_name"],
+                    "product_url": it_url,
+                    "product_image": it_image,
+                    "qty": it["qty"],
+                    "price_usd": it["price_usd"]
+                })
+
+            product_items_json = json.dumps(product_items_list) if len(product_items_list) > 1 else None
+
+            shipment_num = first_item["shipment_id"] or get_next_shipment_id(db, offset=len(created_orders))
+
+            new_order = Order(
+                order_number=order_num,
+                order_process_date=first_item["order_process_date"] or date.today(),
+                shipping_date=first_item["shipping_date"],
+                last_delivery_date=first_item["last_delivery_date"],
+                arriving_date=first_item["arriving_date"],
+                company=first_item["company"],
+                shipment_id=shipment_num,
+                seller_account=first_item["seller_account"],
+                product_id=primary_inv_id,
+                product_name=combined_product_name,
+                product_url=primary_url,
+                product_image=primary_image,
+                product_items=product_items_json,
+                qty=total_qty,
+                product_price=total_price,
+                order_status=first_item["order_status"] or "ADBH",
+                purchase_cost_inr=total_purchase_cost,
+                shipment_cost=total_shipment_cost,
+                consignee_name=first_item["consignee_name"] or "Consignee",
+                shipment_address_1=first_item["shipment_address_1"] or "",
+                shipment_address_2=first_item["shipment_address_2"] or "",
+                city=first_item["city"] or "",
+                state=first_item["state"] or "",
+                zip_code=first_item["zip_code"] or "",
+                mobile_number=first_item["mobile_number"] or "",
+                country=first_item["country"] or "USA",
+                account_id=acc_id,
+                account_name=acc_name,
+                status="Pending"
+            )
+            db.add(new_order)
+            created_orders.append(new_order)
+
+            if first_item["order_process_date"]:
+                months_to_sync.add(first_item["order_process_date"].strftime("%Y-%m"))
+
+        db.commit()
+
+        for m in months_to_sync:
+            sync_admin_cost_share_for_month(m, db)
+
+        return {
+            "success": True,
+            "message": f"Successfully imported {len(created_orders)} order(s) with {total_items_count} product item(s).",
+            "imported_orders_count": len(created_orders),
+            "imported_items_count": total_items_count
+        }
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"An error occurred while saving imported orders: {str(exc)}"
         )
-        db.add(order)
-        imported_orders.append(order)
-        if process_date:
-            months.add(process_date.strftime("%Y-%m"))
-
-    db.commit()
-
-    for m in months:
-        sync_admin_cost_share_for_month(m, db)
-
-    return {
-        "success": True,
-        "message": f"Imported {len(imported_orders)} orders successfully ({skipped_count} duplicates skipped).",
-        "imported_count": len(imported_orders),
-        "skipped_count": skipped_count
-    }
 
 @router.post("/bulk", response_model=List[OrderResponse])
 def create_bulk_orders(
@@ -1213,6 +1761,10 @@ def delete_order(
 
     d = order.order_date or order.order_process_date or date.today()
     month = d.strftime("%Y-%m") if d else None
+
+    from app.core.s3 import delete_file_from_s3
+    if order.label_pdf_url:
+        delete_file_from_s3(order.label_pdf_url)
 
     db.delete(order)
     db.commit()

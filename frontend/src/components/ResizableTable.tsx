@@ -54,8 +54,6 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
       resizer.className = 'col-resizer';
       th.appendChild(resizer);
 
-      const nextTh = ths[i + 1];
-
       const onMouseDown = (e: MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -65,18 +63,18 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
           const allThs = headerRow.querySelectorAll('th');
           const currentWidths: number[] = [];
           allThs.forEach((t) => {
-            currentWidths.push(Math.max(80, t.getBoundingClientRect().width));
+            currentWidths.push(Math.max(40, t.getBoundingClientRect().width));
           });
           table.style.tableLayout = 'fixed';
           allThs.forEach((t, idx) => {
             t.style.width = `${currentWidths[idx]}px`;
-            t.style.minWidth = t.classList.contains('sticky') ? '70px' : '60px';
+            t.style.minWidth = t.classList.contains('sticky') ? '70px' : '40px';
+            t.style.maxWidth = 'none';
           });
         }
 
         const startX = e.clientX;
         const startWidth = th.getBoundingClientRect().width;
-        const nextStartWidth = nextTh ? nextTh.getBoundingClientRect().width : 100;
 
         resizer.classList.add('col-resizer-active');
         document.body.style.cursor = 'col-resize';
@@ -84,12 +82,10 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
 
         const onMouseMove = (ev: MouseEvent) => {
           const diff = ev.clientX - startX;
-          const newWidth = Math.max(60, startWidth + diff);
+          const newWidth = Math.max(40, startWidth + diff);
           th.style.width = `${newWidth}px`;
-          if (nextTh && !nextTh.classList.contains('sticky')) {
-            const nextNewWidth = Math.max(60, nextStartWidth - diff);
-            nextTh.style.width = `${nextNewWidth}px`;
-          }
+          th.style.minWidth = `${newWidth}px`;
+          th.style.maxWidth = `${newWidth}px`;
         };
 
         const onMouseUp = () => {
@@ -113,7 +109,7 @@ export default function ResizableTable({ children, className = '' }: ResizableTa
   useEffect(() => {
     const timer = setTimeout(initResizers, 200);
     return () => clearTimeout(timer);
-  }, [initResizers]);
+  }, [initResizers, children]);
 
   return (
     <div className="resizable-table-wrapper w-full overflow-x-auto">

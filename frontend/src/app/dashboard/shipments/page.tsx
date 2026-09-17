@@ -1774,8 +1774,8 @@ export default function ShipmentsPage() {
                           {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>}
                           {visibleColumnsReady['seller_account'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1]">{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>}
                           {visibleColumnsReady['product_name'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ord.product_name}>
-                              <div className="flex items-center gap-2">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
+                              <div className="flex items-center gap-2 max-w-full overflow-hidden">
                                 {ord.product_image && (
                                   /* eslint-disable-next-line @next/next/no-img-element */
                                   <img
@@ -1792,13 +1792,14 @@ export default function ShipmentsPage() {
                                     href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[200px] truncate font-bold"
+                                    className="text-[#2271b1] hover:underline inline-flex items-center gap-1 min-w-0 flex-1 truncate font-bold"
+                                    title={ord.product_name}
                                   >
                                     <span className="truncate">{ord.product_name}</span>
                                     <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
                                   </a>
                                 ) : (
-                                  <span>{ord.product_name}</span>
+                                  <span className="truncate min-w-0 flex-1" title={ord.product_name}>{ord.product_name}</span>
                                 )}
                               </div>
                             </td>
@@ -2074,8 +2075,8 @@ export default function ShipmentsPage() {
                             </td>
                           )}
                           {visibleColumnsDispatched['product_name'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ship.product_name}>
-                              <div className="flex items-center gap-2">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ship.product_name}>
+                              <div className="flex items-center gap-2 max-w-full overflow-hidden">
                                 {(ship.product_image || matchingOrder?.product_image) && (
                                   /* eslint-disable-next-line @next/next/no-img-element */
                                   <img
@@ -2087,7 +2088,7 @@ export default function ShipmentsPage() {
                                     className="w-7 h-7 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
                                   />
                                 )}
-                                <span>{ship.product_name}</span>
+                                <span className="truncate min-w-0 flex-1">{ship.product_name}</span>
                               </div>
                             </td>
                           )}

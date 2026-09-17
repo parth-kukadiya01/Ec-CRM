@@ -7,7 +7,12 @@ When S3 is NOT configured, falls back to local disk storage for development.
 import os
 import logging
 import uuid
+import mimetypes
+import base64
+import re
+import hashlib
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger("crm_api.s3")
 
@@ -54,22 +59,69 @@ def is_s3_enabled() -> bool:
     return bool(_s3_available)
 
 
-def generate_s3_key(original_filename: str, prefix: str = "uploads") -> str:
-    """Generate a unique S3 object key from an original filename."""
-    ext = os.path.splitext(original_filename)[1]
+def sanitize_folder_name(name: Optional[str], default: str = "general") -> str:
+    """Sanitize partner or company name into a clean folder name for S3."""
+    if not name:
+        return default
+    clean = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(name).strip())
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    return clean or default
+
+
+def generate_s3_key(
+    original_filename: str,
+    prefix: str = "uploads",
+    file_content: Optional[bytes] = None
+) -> str:
+    """
+    Generate an S3 object key.
+    Uses SHA-256 content hashing to ensure identical images share the exact same key (Deduplication).
+    """
     safe_name = original_filename.replace(" ", "_")
-    unique_name = f"{uuid.uuid4().hex[:12]}_{safe_name}"
-    return f"{prefix}/{unique_name}"
+    if file_content:
+        content_hash = hashlib.sha256(file_content).hexdigest()[:16]
+        unique_name = f"{content_hash}_{safe_name}"
+    else:
+        unique_name = f"{uuid.uuid4().hex[:12]}_{safe_name}"
+
+    clean_prefix = prefix.strip("/") if prefix else "uploads"
+    return f"{clean_prefix}/{unique_name}"
+
+
+def extract_s3_key(url_or_key: Optional[str]) -> Optional[str]:
+    """
+    Extract the S3 object key from a full URL (S3, CloudFront, relative /uploads/...) or raw key.
+    """
+    if not url_or_key:
+        return None
+
+    raw = str(url_or_key).strip()
+    if not raw:
+        return None
+
+    # Handle full http/https URLs
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urlparse(raw)
+        path = parsed.path.lstrip("/")
+        return path if path else None
+
+    # Handle leading slash (e.g. /uploads/...)
+    if raw.startswith("/"):
+        return raw.lstrip("/")
+
+    return raw
 
 
 def upload_file_to_s3(
     file_content: bytes,
     original_filename: str,
-    content_type: str = "application/octet-stream",
+    content_type: Optional[str] = None,
     prefix: str = "uploads",
+    custom_key: Optional[str] = None,
 ) -> Tuple[Optional[str], str, str]:
     """
-    Upload a file to S3.
+    Upload a file to S3 with duplicate prevention (Deduplication).
+    If the identical image already exists in S3 under the folder, reuses the existing URL without storing a duplicate.
 
     Returns:
         (s3_url, s3_key, unique_filename)
@@ -77,14 +129,40 @@ def upload_file_to_s3(
     """
     from app.core.config import settings
 
-    s3_key = generate_s3_key(original_filename, prefix)
+    if custom_key:
+        s3_key = custom_key.lstrip("/")
+    else:
+        s3_key = generate_s3_key(original_filename, prefix, file_content=file_content)
+
     unique_filename = s3_key.split("/")[-1]
+
+    if not content_type or content_type == "application/octet-stream":
+        guessed_type, _ = mimetypes.guess_type(original_filename)
+        if guessed_type:
+            content_type = guessed_type
+        else:
+            content_type = "application/octet-stream"
 
     client = _get_s3_client()
     if not client:
         return None, "", unique_filename
 
+    # Build the public URL
+    if settings.S3_CDN_DOMAIN:
+        s3_url = f"https://{settings.S3_CDN_DOMAIN}/{s3_key}"
+    else:
+        s3_url = f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
     try:
+        # Check if the file already exists in S3 (Zero Duplicate Storage)
+        try:
+            client.head_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
+            logger.info(f"Deduplication hit: {s3_key} already exists in S3. Reusing existing image URL.")
+            return s3_url, s3_key, unique_filename
+        except Exception:
+            # File does not exist yet, proceed to upload
+            pass
+
         client.put_object(
             Bucket=settings.S3_BUCKET_NAME,
             Key=s3_key,
@@ -92,13 +170,7 @@ def upload_file_to_s3(
             ContentType=content_type,
         )
 
-        # Build the public URL
-        if settings.S3_CDN_DOMAIN:
-            s3_url = f"https://{settings.S3_CDN_DOMAIN}/{s3_key}"
-        else:
-            s3_url = f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
-
-        logger.info(f"Uploaded to S3: {s3_key}")
+        logger.info(f"Uploaded new unique image to S3: {s3_key}")
         return s3_url, s3_key, unique_filename
 
     except Exception as e:
@@ -106,9 +178,52 @@ def upload_file_to_s3(
         raise
 
 
-def delete_file_from_s3(s3_key: str) -> bool:
-    """Delete a file from S3 by its object key."""
+def upload_base64_or_data_uri_to_s3(
+    data_uri: str,
+    prefix: str = "uploads",
+    fallback_filename: str = "product_image.png"
+) -> Optional[str]:
+    """
+    If input is a base64 data URI (data:image/...;base64,...), upload it to S3 with deduplication and return the S3 URL.
+    If it's already a regular URL (http/https), returns the URL directly.
+    """
+    if not data_uri or not isinstance(data_uri, str):
+        return data_uri
+
+    if not data_uri.startswith("data:"):
+        return data_uri
+
+    try:
+        header, encoded = data_uri.split(",", 1)
+        content_type = "image/png"
+        if ";" in header:
+            content_type = header.split(";")[0].replace("data:", "")
+
+        file_bytes = base64.b64decode(encoded)
+        ext = mimetypes.guess_extension(content_type) or ".png"
+        if not ext.startswith("."):
+            ext = f".{ext}"
+
+        safe_filename = os.path.splitext(fallback_filename)[0] + ext
+        s3_url, _, _ = upload_file_to_s3(
+            file_content=file_bytes,
+            original_filename=safe_filename,
+            content_type=content_type,
+            prefix=prefix,
+        )
+        return s3_url
+    except Exception as e:
+        logger.error(f"Failed to decode and upload base64 to S3: {e}")
+        return data_uri
+
+
+def delete_file_from_s3(url_or_key: Optional[str]) -> bool:
+    """Delete a file from S3 by its object key or full S3 URL."""
     from app.core.config import settings
+
+    s3_key = extract_s3_key(url_or_key)
+    if not s3_key:
+        return False
 
     client = _get_s3_client()
     if not client:
@@ -122,13 +237,17 @@ def delete_file_from_s3(s3_key: str) -> bool:
         logger.info(f"Deleted from S3: {s3_key}")
         return True
     except Exception as e:
-        logger.error(f"S3 delete failed: {e}")
+        logger.error(f"S3 delete failed ({s3_key}): {e}")
         return False
 
 
-def generate_presigned_url(s3_key: str, expiration: int = 3600) -> Optional[str]:
+def generate_presigned_url(url_or_key: str, expiration: int = 3600) -> Optional[str]:
     """Generate a presigned URL for private S3 objects (valid for `expiration` seconds)."""
     from app.core.config import settings
+
+    s3_key = extract_s3_key(url_or_key)
+    if not s3_key:
+        return None
 
     client = _get_s3_client()
     if not client:

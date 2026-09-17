@@ -80,15 +80,23 @@ export const inventoryApi = {
 };
 
 export const uploadApi = {
-  uploadFile: (file: File) => {
+  uploadFile: (file: File, options?: { folder?: string; partner?: string; company?: string } | string) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (typeof options === 'string') {
+      formData.append('folder', options);
+    } else if (options) {
+      if (options.folder) formData.append('folder', options.folder);
+      if (options.partner) formData.append('partner', options.partner);
+      if (options.company) formData.append('company', options.company);
+    }
     return api.post('/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
     });
   },
+  deleteFile: (fileUrl: string) => api.delete('/upload', { data: { file_url: fileUrl } }),
 };
 
 export const accountsApi = {
@@ -130,9 +138,34 @@ export const ordersApi = {
   uploadCsv: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-    return api.post('/orders/upload-csv', formData, {
+    return api.post('/orders/upload-bulk-file', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
+  },
+  uploadBulkFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/orders/upload-bulk-file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  downloadSampleTemplate: async (format: 'csv' | 'xlsx' = 'csv') => {
+    const response = await api.get(`/orders/sample-template?format=${format}`, {
+      responseType: 'blob',
+    });
+    const blob = new Blob([response.data], {
+      type: format === 'xlsx'
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'text/csv;charset=utf-8;'
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `orders_sample_template.${format}`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   },
   extractUrlImage: (url: string) => api.get('/orders/extract-url-image', { params: { url } }),
   uploadLabelPdf: (orderId: number, file: File, labelCostUsd: number, labelFree: boolean) => {

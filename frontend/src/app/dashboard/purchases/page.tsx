@@ -511,8 +511,8 @@ export default function PurchasesPage() {
                             )}
                           </td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold text-[#1d2327]">{ord.buyer_name || ord.consignee_name || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={ord.product_name}>
-                            <div className="flex items-center gap-2">
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
+                            <div className="flex items-center gap-2 max-w-full overflow-hidden">
                               {ord.product_image && (
                                 <img
                                   src={getImageUrl(ord.product_image)}
@@ -525,13 +525,14 @@ export default function PurchasesPage() {
                                   href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-[#2271b1] hover:underline inline-flex items-center gap-1 max-w-[210px] truncate font-bold"
+                                  className="text-[#2271b1] hover:underline inline-flex items-center gap-1 min-w-0 flex-1 truncate font-bold"
+                                  title={ord.product_name}
                                 >
                                   <span className="truncate">{ord.product_name}</span>
                                   <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
                                 </a>
                               ) : (
-                                <span>{ord.product_name}</span>
+                                <span className="truncate min-w-0 flex-1" title={ord.product_name}>{ord.product_name}</span>
                               )}
                               {inStockQty > 0 && (
                                 <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[9px] rounded-xs shrink-0">
@@ -677,7 +678,7 @@ export default function PurchasesPage() {
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium">{pur.order_date || '—'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{pur.company || pur.account_name || 'ADBH'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#2271b1]">{pur.purchase_partner_name || pur.account_name || 'Aryastore Partner'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold max-w-xs truncate" title={pur.product_name}>{pur.product_name}</td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold truncate" title={pur.product_name}>{pur.product_name}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] text-[#2271b1] font-semibold">{pur.sku || '—'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center">
                             <span className={`px-2 py-0.5 font-bold text-[10px] rounded-xs border ${pur.gst_type === 'Non GST' ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-blue-100 text-blue-900 border-blue-300'}`}>
