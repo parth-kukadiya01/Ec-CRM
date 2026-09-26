@@ -52,6 +52,21 @@ async def upload_file(
                 content_type=file.content_type or "application/octet-stream",
                 prefix=s3_folder,
             )
+
+            # Local write-through cache so immediate local reads never 404
+            try:
+                local_cache_path = os.path.join(UPLOADS_DIR, s3_key)
+                os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
+                with open(local_cache_path, "wb") as buffer:
+                    buffer.write(content)
+                if s3_key.startswith("uploads/"):
+                    flat_cache_path = os.path.join(UPLOADS_DIR, s3_key[len("uploads/"):])
+                    if not os.path.exists(flat_cache_path):
+                        with open(flat_cache_path, "wb") as buffer:
+                            buffer.write(content)
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "filename": unique_name,
@@ -101,6 +116,18 @@ def delete_file(
     try:
         if is_s3_enabled():
             success = delete_file_from_s3(req.file_url)
+            # Remove from local cache as well
+            try:
+                from app.core.s3 import extract_s3_key
+                k = extract_s3_key(req.file_url)
+                if k:
+                    for cand in [k, k[len("uploads/"):] if k.startswith("uploads/") else None]:
+                        if cand:
+                            p = os.path.join(UPLOADS_DIR, cand)
+                            if os.path.exists(p):
+                                os.remove(p)
+            except Exception:
+                pass
             return {"success": success, "message": "File deleted from S3" if success else "File not found"}
         else:
             # Local fallback deletion

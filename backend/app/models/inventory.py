@@ -6,7 +6,7 @@ class Inventory(Base):
     __tablename__ = "inventory"
 
     id = Column(Integer, primary_key=True, index=True)
-    product_name = Column(String(200), nullable=False, index=True)
+    product_name = Column(Text, nullable=False, index=True)
     price = Column(Float, nullable=False, default=0.0)
     stock_quantity = Column(Integer, nullable=False, default=0)
     sku = Column(String(50), unique=True, nullable=True, index=True)
@@ -16,6 +16,6 @@ class Inventory(Base):
     partner_id = Column(Integer, nullable=True, index=True)
     partner_name = Column(String(200), nullable=True)
     image_url = Column(Text, nullable=True)
-    product_url = Column(String(500), nullable=True)
+    product_url = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

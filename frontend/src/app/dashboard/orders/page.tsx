@@ -41,11 +41,31 @@ import {
   FileText,
   StickyNote,
   Tag,
-  Settings2
+  Settings2,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
 const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta'];
+
+interface PurchaseItem {
+  id: string;
+  product_id?: number | null;
+  product_name: string;
+  product_url?: string;
+  product_image?: string;
+  qty: number;
+  price_usd?: number;
+  is_in_stock: boolean;
+  company: string;
+  purchase_value: number | '';
+  purchase_partner_name: string;
+  sku?: string;
+  delivery_code?: string;
+  estimated_shipment_date?: string;
+  notes?: string;
+}
 
 const ORDER_TABLE_COLUMNS: ColumnDefinition[] = [
   { key: 'no', label: 'No.', locked: true },
@@ -155,7 +175,7 @@ export default function OrdersPage() {
       try {
         const saved = localStorage.getItem('crm_orders_column_visibility');
         if (saved) return JSON.parse(saved);
-      } catch (e) {}
+      } catch (e) { }
     }
     const initial: Record<string, boolean> = {};
     DEFAULT_VISIBLE_ORDER_KEYS.forEach(k => { initial[k] = true; });
@@ -226,6 +246,14 @@ export default function OrdersPage() {
     direct_to_shipment: true,
     is_in_stock: false,
   });
+
+  // Multi-product purchase state
+  const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([]);
+  const [isMultiProduct, setIsMultiProduct] = useState(false);
+
+  const updatePurchaseItem = (id: string, updates: Partial<PurchaseItem>) => {
+    setPurchaseItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+  };
 
   // Searchable Seller Dropdown State
   const [sellerSearch, setSellerSearch] = useState('');
@@ -375,13 +403,15 @@ export default function OrdersPage() {
   });
 
   // Multi-Product Form State for Orders
-  const createBlankProduct = () => ({
+  const createBlankProduct = (defaultStatus = 'ADBH') => ({
     id: 'prod_' + Math.random().toString(36).substring(2, 9),
     product_id: undefined as number | undefined,
     product_name: '',
     product_url: '',
     product_image: '',
     qty: 1,
+    price_usd: 0,
+    order_status: defaultStatus,
     fetchingUrlImage: false,
     urlFetchStatus: null as string | null,
     isDraggingImage: false,
@@ -392,18 +422,47 @@ export default function OrdersPage() {
   type ProductItemType = ReturnType<typeof createBlankProduct>;
   const [orderProducts, setOrderProducts] = useState<ProductItemType[]>([createBlankProduct()]);
 
+  const calculateTotalSellingPrice = (items: ProductItemType[]) => {
+    return items.reduce((sum, p) => {
+      const price = parseFloat(String(p.price_usd)) || 0;
+      const qty = parseInt(String(p.qty)) || 1;
+      return sum + (price * qty);
+    }, 0);
+  };
+
   const handleAddProductItem = () => {
-    setOrderProducts(prev => [...prev, createBlankProduct()]);
+    setOrderProducts(prev => {
+      const next = [...prev, createBlankProduct(orderForm.order_status || 'ADBH')];
+      const newTotal = calculateTotalSellingPrice(next);
+      setOrderForm(f => ({ ...f, price_usd: parseFloat(newTotal.toFixed(2)) }));
+      return next;
+    });
   };
 
   const handleRemoveProductItem = (id: string) => {
     if (orderProducts.length <= 1) return;
-    setOrderProducts(prev => prev.filter(p => p.id !== id));
+    setOrderProducts(prev => {
+      const next = prev.filter(p => p.id !== id);
+      const newTotal = calculateTotalSellingPrice(next);
+      setOrderForm(f => ({ ...f, price_usd: parseFloat(newTotal.toFixed(2)) }));
+      return next;
+    });
   };
 
   const handleUpdateProductItem = (id: string, updates: Partial<ProductItemType>) => {
-    setOrderProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    setOrderProducts(prev => {
+      const next = prev.map(p => p.id === id ? { ...p, ...updates } : p);
+      if ('price_usd' in updates || 'qty' in updates) {
+        const newTotal = calculateTotalSellingPrice(next);
+        setOrderForm(f => ({ ...f, price_usd: parseFloat(newTotal.toFixed(2)) }));
+      }
+      return next;
+    });
   };
+
+  const totalPurchaseCost = isMultiProduct && purchaseItems.length > 0
+    ? purchaseItems.reduce((sum, it) => sum + (parseFloat(String(it.purchase_value)) || 0), 0)
+    : (parseFloat(String(purchaseForm.purchase_value)) || 0);
 
   const fetchImageForProduct = async (rawUrl: string, productId: string) => {
     if (!rawUrl || !rawUrl.trim()) return;
@@ -978,7 +1037,86 @@ export default function OrdersPage() {
       (order.product_id && item.id === order.product_id) ||
       (item.product_name && order.product_name && item.product_name.toLowerCase() === order.product_name.toLowerCase())
     );
-    const existingPur = purchasesList.find((p: any) => p.order_id === order.id);
+
+    // Parse product_items to check for multi-product orders
+    let parsedItems: any[] = [];
+    try {
+      if (order.product_items) {
+        const parsed = typeof order.product_items === 'string' ? JSON.parse(order.product_items) : order.product_items;
+        if (Array.isArray(parsed) && parsed.length > 1) {
+          parsedItems = parsed;
+        }
+      }
+    } catch (e) { }
+
+    const existingPurs = purchasesList.filter((p: any) => p.order_id === order.id);
+
+    if (parsedItems.length > 1) {
+      setIsMultiProduct(true);
+      const items: PurchaseItem[] = parsedItems.map((p: any, idx: number) => {
+        const itemInv = inventoryList.find((inv: any) =>
+          (p.product_id && inv.id === p.product_id) ||
+          (inv.product_name && p.product_name && inv.product_name.toLowerCase() === p.product_name.toLowerCase())
+        );
+        const inStockQty = itemInv?.stock_quantity || 0;
+
+        // Try to match existing purchase by product name or index
+        const matchedPur = existingPurs.find((ep: any) =>
+          ep.product_name && p.product_name &&
+          (ep.product_name.toLowerCase() === p.product_name.toLowerCase() ||
+            ep.product_name.toLowerCase().includes(p.product_name.toLowerCase().substring(0, 15)) ||
+            p.product_name.toLowerCase().includes(ep.product_name.toLowerCase().substring(0, 15)))
+        ) || existingPurs[idx];
+
+        const itemStatus = (p.order_status || '').trim();
+        const isStatusInStock = itemStatus.toLowerCase() === 'in stock' || itemStatus.toLowerCase() === 'instock';
+
+        let isItemStock = false;
+        if (matchedPur) {
+          isItemStock = Boolean(
+            matchedPur.is_in_stock ||
+            matchedPur.purchase_partner_name === 'In Stock' ||
+            matchedPur.bank === 'In Stock' ||
+            matchedPur.notes?.includes('In-Stock')
+          );
+        } else if (itemStatus) {
+          isItemStock = isStatusInStock;
+        } else {
+          const ordStatus = (order.order_status || '').trim().toLowerCase();
+          isItemStock = isInStock || ordStatus === 'in stock' || ordStatus === 'instock' || inStockQty >= (p.qty || 1);
+        }
+
+        const itemCompany = matchedPur?.company || (
+          !isStatusInStock && itemStatus
+            ? itemStatus
+            : (order.company || 'ADBH')
+        );
+
+        return {
+          id: `item_${idx}_${Math.random().toString(36).substring(2, 7)}`,
+          product_id: p.product_id || null,
+          product_name: p.product_name || '',
+          product_url: p.product_url || '',
+          product_image: p.product_image || '',
+          qty: p.qty || 1,
+          price_usd: p.price_usd || 0,
+          is_in_stock: isItemStock,
+          company: itemCompany,
+          purchase_value: matchedPur ? (matchedPur.purchase_value !== undefined ? matchedPur.purchase_value : '') : (p.purchase_cost_inr || ''),
+          purchase_partner_name: matchedPur?.purchase_partner_name || (isItemStock ? 'In-Stock Inventory' : (order.seller_account || order.account_name || 'Aryastore Partner')),
+          sku: matchedPur?.sku || itemInv?.sku || '',
+          delivery_code: matchedPur?.delivery_code || order.oi || order.shipment_id || '',
+          estimated_shipment_date: matchedPur?.estimated_shipment_date || new Date().toISOString().split('T')[0],
+          notes: matchedPur?.notes || (isItemStock ? 'In-Stock Order' : ''),
+        };
+      });
+      setPurchaseItems(items);
+    } else {
+      setIsMultiProduct(false);
+      setPurchaseItems([]);
+    }
+
+    const existingPur = existingPurs[0];
     const isStock = isInStock !== undefined ? isInStock : Boolean(existingPur?.is_in_stock || existingPur?.notes?.includes('In-Stock') || existingPur?.purchase_partner_name === 'In Stock');
 
     setPurchaseForm({
@@ -1015,26 +1153,139 @@ export default function OrdersPage() {
     e.preventDefault();
     if (!selectedOrderForPurchase) return;
 
-    const pVal = parseFloat(String(purchaseForm.purchase_value));
-    if (isNaN(pVal) || pVal < 0) {
-      alert('Please enter a valid Purchase Price / Amount (INR ₹)');
-      return;
-    }
-
-    if (!purchaseForm.is_in_stock) {
-      if (!purchaseForm.purchase_partner_name?.trim()) {
-        alert('Please enter the Vendor / Supplier Name');
-        return;
-      }
-      if (!purchaseForm.estimated_shipment_date) {
-        alert('Please enter the Arrived Delivery Date');
-        return;
-      }
-    }
-
     const currentScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
 
     try {
+      if (isMultiProduct && purchaseItems.length > 0) {
+        // Multi-Product handling
+        let totalPurchaseCostAll = 0;
+        let allInStock = true;
+        let anyInStock = false;
+
+        for (const item of purchaseItems) {
+          const pVal = parseFloat(String(item.purchase_value)) || 0;
+          const isStock = Boolean(item.is_in_stock);
+          if (isStock) anyInStock = true;
+          else allInStock = false;
+
+          if (!isStock && !item.purchase_partner_name?.trim()) {
+            alert(`Please enter Vendor / Supplier Name for "${item.product_name}"`);
+            return;
+          }
+          totalPurchaseCostAll += pVal;
+        }
+
+        // Clean up any old purchases for this order to avoid duplicate / orphaned merged records
+        const existingPurs = purchasesList.filter((p: any) => p.order_id === selectedOrderForPurchase.id);
+        for (const ep of existingPurs) {
+          try {
+            await purchasesApi.delete(ep.id);
+          } catch (e) {
+            console.error('Failed to clean old purchase', e);
+          }
+        }
+
+        const createdPurchases: any[] = [];
+        for (const item of purchaseItems) {
+          const pVal = parseFloat(String(item.purchase_value)) || 0;
+          const isStock = Boolean(item.is_in_stock);
+          const purStatus = isStock ? 'Received' : 'Purchased';
+
+          const res = await purchasesApi.create({
+            order_id: selectedOrderForPurchase.id,
+            order_date: purchaseForm.order_date || new Date().toISOString().split('T')[0],
+            product_name: item.product_name || 'Item',
+            sku: item.sku || null,
+            gst_type: purchaseForm.gst_type || 'GST',
+            bank: isStock ? 'In Stock' : (purchaseForm.bank || null),
+            po_number: purchaseForm.po_number || null,
+            purchase_value: pVal,
+            other_cost: 0,
+            extra_cost: 0,
+            delivery_code: item.delivery_code || selectedOrderForPurchase.oi || null,
+            estimated_shipment_date: item.estimated_shipment_date || new Date().toISOString().split('T')[0],
+            account_name: purchaseForm.account_name || selectedOrderForPurchase.account_name || null,
+            purchase_partner_name: isStock ? 'In Stock' : (item.purchase_partner_name?.trim() || 'Aryastore Partner'),
+            payment_status: purchaseForm.payment_status || 'Paid',
+            status: purStatus,
+            notes: item.notes || (isStock ? 'In-Stock Order' : null),
+            company: item.company || selectedOrderForPurchase.company || 'ADBH',
+            qty: parseInt(String(item.qty)) || 1,
+            is_in_stock: isStock,
+          });
+          if (res.data) createdPurchases.push(res.data);
+        }
+
+        // Update product_items with their individual updated order_status / company
+        let updatedProductItems: any[] = [];
+        try {
+          if (selectedOrderForPurchase.product_items) {
+            const raw = typeof selectedOrderForPurchase.product_items === 'string' ? JSON.parse(selectedOrderForPurchase.product_items) : selectedOrderForPurchase.product_items;
+            if (Array.isArray(raw)) {
+              updatedProductItems = raw.map((rawItem: any, idx: number) => {
+                const matched = purchaseItems[idx];
+                if (matched) {
+                  return {
+                    ...rawItem,
+                    order_status: matched.is_in_stock ? 'in stock' : (matched.company || 'ADBH')
+                  };
+                }
+                return rawItem;
+              });
+            }
+          }
+        } catch (e) { }
+
+        const ordStatus = allInStock ? 'In Stock' : (anyInStock ? 'ADBH' : 'Purchase Pending');
+
+        await ordersApi.update(selectedOrderForPurchase.id, {
+          purchase_cost_inr: totalPurchaseCostAll,
+          oi: purchaseItems.find(it => it.delivery_code)?.delivery_code || selectedOrderForPurchase.oi,
+          product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : selectedOrderForPurchase.product_items,
+          qty: purchaseItems.reduce((sum, it) => sum + (parseInt(String(it.qty)) || 1), 0),
+          arriving_date: purchaseItems.find(it => !it.is_in_stock)?.estimated_shipment_date || null,
+          status: ordStatus
+        });
+
+        setPurchasesList(prev => {
+          const filtered = prev.filter((p: any) => p.order_id !== selectedOrderForPurchase.id);
+          return [...createdPurchases, ...filtered];
+        });
+
+        setOrders(prev => prev.map(o => o.id === selectedOrderForPurchase.id ? {
+          ...o,
+          purchase_cost_inr: totalPurchaseCostAll,
+          product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : o.product_items,
+          status: ordStatus,
+          arriving_date: purchaseItems.find(it => !it.is_in_stock)?.estimated_shipment_date || o.arriving_date
+        } : o));
+
+        setShowPurchaseModal(false);
+        await loadData(false);
+        if (typeof window !== 'undefined') {
+          window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+        }
+        return;
+      }
+
+      // Single Product original flow
+      const pVal = parseFloat(String(purchaseForm.purchase_value));
+      if (isNaN(pVal) || pVal < 0) {
+        alert('Please enter a valid Purchase Price / Amount (INR ₹)');
+        return;
+      }
+
+      if (!purchaseForm.is_in_stock) {
+        if (!purchaseForm.purchase_partner_name?.trim()) {
+          alert('Please enter the Vendor / Supplier Name');
+          return;
+        }
+        if (!purchaseForm.estimated_shipment_date) {
+          alert('Please enter the Arrived Delivery Date');
+          return;
+        }
+      }
+
       const totalCost = isNaN(pVal) ? 0 : pVal;
       const isStock = Boolean(purchaseForm.is_in_stock);
       const purStatus = isStock ? 'Received' : 'Pending';
@@ -1169,7 +1420,7 @@ export default function OrdersPage() {
       country: '',
       status: 'ADBH'
     });
-    setOrderProducts([createBlankProduct()]);
+    setOrderProducts([createBlankProduct('ADBH')]);
     setSellerSearch(defaultSellerAccount);
     setShowAddModal(true);
   };
@@ -1181,6 +1432,8 @@ export default function OrdersPage() {
         ...p,
         product_name: p.product_name.trim(),
         qty: parseInt(String(p.qty)) || 1,
+        price_usd: parseFloat(String(p.price_usd)) || 0,
+        order_status: p.order_status || orderForm.order_status || 'ADBH',
       }));
 
       for (let i = 0; i < validProducts.length; i++) {
@@ -1202,7 +1455,14 @@ export default function OrdersPage() {
         product_url: p.product_url ? p.product_url.trim() : null,
         product_image: p.product_image || null,
         qty: p.qty,
+        price_usd: p.price_usd,
+        order_status: p.order_status,
       })));
+
+      const calculatedTotalPrice = calculateTotalSellingPrice(validProducts);
+      const finalPrice = (orderForm.price_usd !== undefined && orderForm.price_usd !== 0)
+        ? parseFloat(String(orderForm.price_usd))
+        : calculatedTotalPrice;
 
       const payload = {
         order_process_date: orderForm.order_process_date || null,
@@ -1219,8 +1479,8 @@ export default function OrdersPage() {
         product_image: validProducts[0].product_image || null,
         product_items: productItemsJson,
         qty: totalQty,
-        price_usd: parseFloat(String(orderForm.price_usd)) || 0,
-        order_status: orderForm.order_status || 'ADBH',
+        price_usd: finalPrice,
+        order_status: orderForm.order_status || validProducts[0]?.order_status || 'ADBH',
         consignee_name: orderForm.consignee_name || 'Consignee',
         shipment_address_1: orderForm.shipment_address_1 || '',
         shipment_address_2: orderForm.shipment_address_2 || '',
@@ -1260,7 +1520,7 @@ export default function OrdersPage() {
           parsedItems = parsed;
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
     if (parsedItems.length > 0) {
       setOrderProducts(parsedItems.map((p: any) => ({
@@ -1270,6 +1530,8 @@ export default function OrdersPage() {
         product_url: p.product_url || '',
         product_image: p.product_image || '',
         qty: p.qty || 1,
+        price_usd: p.price_usd !== undefined ? (parseFloat(String(p.price_usd)) || 0) : (ord.price_usd || ord.product_price || 0),
+        order_status: p.order_status || ord.order_status || 'ADBH',
         fetchingUrlImage: false,
         urlFetchStatus: null,
         isDraggingImage: false,
@@ -1284,6 +1546,8 @@ export default function OrdersPage() {
         product_url: ord.product_url || matchedInv?.product_url || '',
         product_image: ord.product_image || matchedInv?.image_url || '',
         qty: ord.qty || 1,
+        price_usd: ord.price_usd || ord.product_price || 0,
+        order_status: ord.order_status || 'ADBH',
         fetchingUrlImage: false,
         urlFetchStatus: null,
         isDraggingImage: false,
@@ -1330,6 +1594,8 @@ export default function OrdersPage() {
         ...p,
         product_name: p.product_name.trim(),
         qty: parseInt(String(p.qty)) || 1,
+        price_usd: parseFloat(String(p.price_usd)) || 0,
+        order_status: p.order_status || orderForm.order_status || 'ADBH',
       }));
 
       for (let i = 0; i < validProducts.length; i++) {
@@ -1350,7 +1616,14 @@ export default function OrdersPage() {
         product_url: p.product_url ? p.product_url.trim() : null,
         product_image: p.product_image || null,
         qty: p.qty,
+        price_usd: p.price_usd,
+        order_status: p.order_status,
       })));
+
+      const calculatedTotalPrice = calculateTotalSellingPrice(validProducts);
+      const finalPrice = (orderForm.price_usd !== undefined && orderForm.price_usd !== 0)
+        ? parseFloat(String(orderForm.price_usd))
+        : calculatedTotalPrice;
 
       const payload = {
         ...orderForm,
@@ -1360,9 +1633,9 @@ export default function OrdersPage() {
         product_image: validProducts[0].product_image || null,
         product_items: productItemsJson,
         qty: totalQty,
-        price_usd: parseFloat(orderForm.price_usd as any) || 0,
+        price_usd: finalPrice,
         status: orderForm.status || editingOrder.status || 'Pending',
-        order_status: orderForm.order_status || 'ADBH',
+        order_status: orderForm.order_status || validProducts[0]?.order_status || 'ADBH',
         order_process_date: orderForm.order_process_date || null,
         shipping_date: orderForm.shipping_date || null,
         last_delivery_date: orderForm.last_delivery_date || null,
@@ -1783,35 +2056,35 @@ export default function OrdersPage() {
           </div>
         ) : (
           <>
-            <div className="table-container overflow-x-auto">
-              <ResizableTable className="w-full text-left text-xs border-collapse">
+            <div className="w-full">
+              <ResizableTable storageKey="orders_table_cols" className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                    {visibleColumns.no !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center w-12">No.</th>}
-                    {visibleColumns.order_process_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order Process Date</th>}
-                    {visibleColumns.shipping_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
-                    {visibleColumns.last_delivery_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
-                    {visibleColumns.arriving_date !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arriving Date</th>}
-                    {visibleColumns.company !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[110px]">Company / Person</th>}
-                    {visibleColumns.shipment_id !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>}
-                    {visibleColumns.order_number !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
-                    {visibleColumns.seller_account !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>}
-                    {visibleColumns.product_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Product Name</th>}
-                    {visibleColumns.qty !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
-                    {visibleColumns.price_usd !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Price ($)</th>}
-                    {visibleColumns.order_status !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Order Status</th>}
-                    {visibleColumns.purchase_action !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[210px]">Purchase Action</th>}
-                    {visibleColumns.consignee_name !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
-                    {visibleColumns.shipment_address_1 !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 1</th>}
-                    {visibleColumns.shipment_address_2 !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 2</th>}
-                    {visibleColumns.city !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
-                    {visibleColumns.state !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
-                    {visibleColumns.zip_code !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
-                    {visibleColumns.mobile_number !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
-                    {visibleColumns.country !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
-                    {visibleColumns.label !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[140px]">Label</th>}
+                    {visibleColumns.no !== false && <th data-col="no" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center w-12">No.</th>}
+                    {visibleColumns.order_process_date !== false && <th data-col="order_process_date" className="py-2.5 px-3 border-r border-[#c3c4c7]">Order Process Date</th>}
+                    {visibleColumns.shipping_date !== false && <th data-col="shipping_date" className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
+                    {visibleColumns.last_delivery_date !== false && <th data-col="last_delivery_date" className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
+                    {visibleColumns.arriving_date !== false && <th data-col="arriving_date" className="py-2.5 px-3 border-r border-[#c3c4c7]">Arriving Date</th>}
+                    {visibleColumns.company !== false && <th data-col="company" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Company / Person</th>}
+                    {visibleColumns.shipment_id !== false && <th data-col="shipment_id" className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>}
+                    {visibleColumns.order_number !== false && <th data-col="order_number" className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
+                    {visibleColumns.seller_account !== false && <th data-col="seller_account" className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>}
+                    {visibleColumns.product_name !== false && <th data-col="product_name" className="py-2.5 px-3 border-r border-[#c3c4c7]">Product Name</th>}
+                    {visibleColumns.qty !== false && <th data-col="qty" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
+                    {visibleColumns.price_usd !== false && <th data-col="price_usd" className="py-2.5 px-3 border-r border-[#c3c4c7]">Price ($)</th>}
+                    {visibleColumns.order_status !== false && <th data-col="order_status" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Order Status</th>}
+                    {visibleColumns.purchase_action !== false && <th data-col="purchase_action" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Purchase Action</th>}
+                    {visibleColumns.consignee_name !== false && <th data-col="consignee_name" className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
+                    {visibleColumns.shipment_address_1 !== false && <th data-col="shipment_address_1" className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 1</th>}
+                    {visibleColumns.shipment_address_2 !== false && <th data-col="shipment_address_2" className="py-2.5 px-3 border-r border-[#c3c4c7]">Address Line 2</th>}
+                    {visibleColumns.city !== false && <th data-col="city" className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
+                    {visibleColumns.state !== false && <th data-col="state" className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
+                    {visibleColumns.zip_code !== false && <th data-col="zip_code" className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
+                    {visibleColumns.mobile_number !== false && <th data-col="mobile_number" className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
+                    {visibleColumns.country !== false && <th data-col="country" className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
+                    {visibleColumns.label !== false && <th data-col="label" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Label</th>}
                     {visibleColumns.actions !== false && (
-                      <th className="py-2.5 px-3 text-center sticky right-0 bg-[#f0f0f1] border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-20">Actions</th>
+                      <th data-col="actions" className="py-2.5 px-3 text-center sticky right-0 bg-[#f0f0f1] border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-20">Actions</th>
                     )}
                   </tr>
                 </thead>
@@ -1834,7 +2107,7 @@ export default function OrdersPage() {
                       : (companyColorMap[ord.company] || 'bg-slate-100 text-slate-900 border-slate-300');
 
                     return (
-                      <tr key={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
+                      <tr key={ord.id} data-row-id={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
                         {visibleColumns.no !== false && (
                           <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#50575e]">
                             {(currentPage - 1) * pageSize + index + 1}
@@ -1864,49 +2137,48 @@ export default function OrdersPage() {
                                   const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
                                   if (Array.isArray(parsed) && parsed.length > 0) items = parsed;
                                 }
-                              } catch (e) {}
+                              } catch (e) { }
 
                               if (items.length > 1) {
                                 return (
-                                  <div className="flex flex-col gap-1.5 py-1">
-                                    {items.map((item: any, i: number) => (
-                                      <div key={i} className="flex items-center gap-2 max-w-full">
-                                        {item.product_image ? (
-                                          /* eslint-disable-next-line @next/next/no-img-element */
-                                          <img
-                                            src={getImageUrl(item.product_image)}
-                                            alt=""
-                                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                            className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
-                                          />
-                                        ) : (
-                                          <div className="w-5 h-5 rounded-xs bg-[#f0f0f1] border border-[#c3c4c7] flex items-center justify-center text-[9px] font-bold text-[#50575e] shrink-0">
-                                            P{i + 1}
-                                          </div>
-                                        )}
-                                        <div className="min-w-0 flex-1 overflow-hidden">
-                                          {item.product_url ? (
-                                            <a
-                                              href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-full"
-                                              title={item.product_name}
-                                            >
-                                              <span className="truncate">{item.product_name}</span>
-                                              <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
-                                            </a>
+                                  <div className="flex flex-col gap-1 py-0.5 max-h-full overflow-y-auto">
+                                    {items.map((item: any, i: number) => {
+                                      return (
+                                        <div key={i} className="flex items-center gap-1.5 max-w-full">
+                                          {item.product_image ? (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
+                                            <img
+                                              src={getImageUrl(item.product_image)}
+                                              alt=""
+                                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                              className="w-5 h-5 rounded-xs object-cover border border-[#c3c4c7] shrink-0"
+                                            />
                                           ) : (
-                                            <span className="font-semibold text-xs truncate block max-w-full" title={item.product_name}>
-                                              {item.product_name}
-                                            </span>
+                                            <div className="w-5 h-5 rounded-xs bg-[#f0f0f1] border border-[#c3c4c7] flex items-center justify-center text-[9px] font-bold text-[#50575e] shrink-0">
+                                              P{i + 1}
+                                            </div>
                                           )}
+                                          <div className="min-w-0 flex-1 overflow-hidden">
+                                            {item.product_url ? (
+                                              <a
+                                                href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-full"
+                                                title={item.product_name}
+                                              >
+                                                <span className="truncate">{item.product_name}</span>
+                                                <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
+                                              </a>
+                                            ) : (
+                                              <span className="font-semibold text-xs truncate block max-w-full" title={item.product_name}>
+                                                {item.product_name}
+                                              </span>
+                                            )}
+                                          </div>
                                         </div>
-                                        <span className="inline-flex items-center px-1.5 py-0.2 bg-[#2271b1]/10 text-[#2271b1] text-[10px] font-extrabold rounded-xs border border-[#2271b1]/20 shrink-0">
-                                          ×{item.qty || 1}
-                                        </span>
-                                      </div>
-                                    ))}
+                                      );
+                                    })}
                                   </div>
                                 );
                               }
@@ -1943,8 +2215,46 @@ export default function OrdersPage() {
                             })()}
                           </td>
                         )}
-                        {visibleColumns.qty !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold">{ord.qty}</td>}
-                        {visibleColumns.price_usd !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700">${(ord.price_usd || ord.product_price || 0).toFixed(2)}</td>}
+                        {visibleColumns.qty !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
+                            <span className="font-bold text-[#1d2327]">{ord.qty}</span>
+                            {(() => {
+                              try {
+                                if (ord.product_items) {
+                                  const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+                                  if (Array.isArray(parsed) && parsed.length > 1) {
+                                    return (
+                                      <div className="text-[9px] font-bold text-[#2271b1] mt-0.5">
+                                        ({parsed.length} prods)
+                                      </div>
+                                    );
+                                  }
+                                }
+                              } catch (e) { }
+                              return null;
+                            })()}
+                          </td>
+                        )}
+                        {visibleColumns.price_usd !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-emerald-700 text-center">
+                            <div>${(ord.price_usd || ord.product_price || 0).toFixed(2)}</div>
+                            {(() => {
+                              try {
+                                if (ord.product_items) {
+                                  const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+                                  if (Array.isArray(parsed) && parsed.length > 1) {
+                                    return (
+                                      <div className="text-[9px] font-semibold text-[#50575e] mt-0.5">
+                                        Total ({parsed.length} prods)
+                                      </div>
+                                    );
+                                  }
+                                }
+                              } catch (e) { }
+                              return null;
+                            })()}
+                          </td>
+                        )}
                         {visibleColumns.order_status !== false && (
                           <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
                             {(() => {
@@ -1976,6 +2286,95 @@ export default function OrdersPage() {
                         {visibleColumns.purchase_action !== false && (
                           <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
                             {(() => {
+                              // Check if multi-product order
+                              let multiItems: any[] = [];
+                              try {
+                                if (ord.product_items) {
+                                  const parsed = typeof ord.product_items === 'string' ? JSON.parse(ord.product_items) : ord.product_items;
+                                  if (Array.isArray(parsed) && parsed.length > 1) multiItems = parsed;
+                                }
+                              } catch (e) { }
+
+                              if (multiItems.length > 1) {
+                                const matchingPurs = purchasesList.filter((p: any) => p.order_id === ord.id);
+                                const dueInfo = getDuePurchaseDate(ord.last_delivery_date, ord.shipping_date);
+
+                                if (matchingPurs.length > 0) {
+                                  const totalInr = matchingPurs.reduce((sum: number, p: any) => sum + (parseFloat(p.purchase_value) || 0), 0);
+
+                                  return (
+                                    <div className="flex flex-col items-center justify-center gap-1 py-1">
+                                      <div className="flex flex-col gap-1 w-full max-w-[210px]">
+                                        {multiItems.map((item: any, i: number) => {
+                                          const pur = matchingPurs.find((p: any) =>
+                                            p.product_name && item.product_name && (
+                                              p.product_name.toLowerCase().includes(item.product_name.toLowerCase().substring(0, 15)) ||
+                                              item.product_name.toLowerCase().includes(p.product_name.toLowerCase().substring(0, 15))
+                                            )
+                                          ) || matchingPurs[i];
+
+                                          const isStock = pur ? Boolean(pur.is_in_stock || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock' || pur.notes?.includes('In-Stock')) : false;
+
+                                          return (
+                                            <div key={i} className="flex items-center justify-between text-[10px] bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-xs gap-1">
+                                              <span className="truncate max-w-[85px] font-semibold text-[#1d2327]" title={item.product_name}>
+                                                P{i + 1}: {item.product_name}
+                                              </span>
+                                              {pur ? (
+                                                isStock ? (
+                                                  <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold rounded-xs text-[9px] shrink-0">
+                                                    ✓ In Stock
+                                                  </span>
+                                                ) : (
+                                                  <span className="px-1.5 py-0.2 bg-blue-100 text-blue-900 border border-blue-300 font-extrabold rounded-xs text-[9px] shrink-0 truncate max-w-[85px]" title={pur.company ? `Purchased (${pur.company})` : 'Purchased'}>
+                                                    ✓ {pur.company || 'Purchased'}
+                                                  </span>
+                                                )
+                                              ) : (
+                                                <span className="text-amber-700 font-bold text-[9px] shrink-0">⏳ Pending</span>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+
+                                      <div className="flex items-center justify-center gap-1 mt-0.5">
+                                        <button
+                                          onClick={() => openPurchaseModal(ord)}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#2271b1]/10 text-[#2271b1] hover:bg-[#2271b1] hover:text-white rounded-xs text-[10px] font-bold transition-colors border border-[#2271b1]/30"
+                                          title="Edit Multi-Product Purchases"
+                                        >
+                                          <Edit2 className="w-2.5 h-2.5" />
+                                          <span>Edit</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                // Not purchased yet
+                                return (
+                                  <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <button
+                                        onClick={() => openPurchaseModal(ord)}
+                                        className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1.5 transition-all shadow-xs shrink-0"
+                                        title="Create purchase order entry for items"
+                                      >
+                                        <ShoppingBag className="w-3.5 h-3.5" />
+                                        <span>Purchase</span>
+                                      </button>
+                                    </div>
+                                    {dueInfo && (
+                                      <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue ? 'bg-red-100 text-red-900 border-red-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`} title={`Purchase Due Date: ${dueInfo.formatted}`}>
+                                        <Clock className={`w-3 h-3 shrink-0 ${dueInfo.isOverdue ? 'text-red-700 animate-pulse' : 'text-amber-700 animate-pulse'}`} />
+                                        <span>Due: {dueInfo.formatted}{dueInfo.isOverdue ? ` (${Math.abs(dueInfo.daysLeft)}d overdue)` : ' (Due Today!)'}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              }
+
                               const isStockDone = Boolean(
                                 matchingPur && (
                                   matchingPur.is_in_stock ||
@@ -2364,9 +2763,10 @@ export default function OrdersPage() {
                         )}
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+                      {/* Row 1: Product Name & Product URL */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                         {/* Searchable Product Name Input with Auto-Image and Auto-Price Sync */}
-                        <div className="md:col-span-2 relative" data-product-dropdown>
+                        <div className="relative" data-product-dropdown>
                           <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
                             <span>Product Name *</span>
                           </label>
@@ -2388,11 +2788,10 @@ export default function OrdersPage() {
                                   ...(matched ? {
                                     product_url: matched.product_url || prod.product_url || '',
                                     product_image: matched.image_url || prod.product_image,
+                                    price_usd: matched.price || prod.price_usd || 0,
+                                    order_status: (matched.stock_quantity > 0 ? 'in stock' : prod.order_status) || 'ADBH',
                                   } : {})
                                 });
-                                if (matched?.price && (!orderForm.price_usd || orderForm.price_usd === 0)) {
-                                  setOrderForm(f => ({ ...f, price_usd: matched.price }));
-                                }
                               }}
                               className="w-full bg-white border border-[#8c8f94] p-2 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1]"
                               required
@@ -2412,11 +2811,10 @@ export default function OrdersPage() {
                                       product_name: item.product_name,
                                       product_url: item.product_url || prod.product_url || '',
                                       product_image: item.image_url || prod.product_image,
+                                      price_usd: item.price || prod.price_usd || 0,
+                                      order_status: (item.stock_quantity > 0 ? 'in stock' : prod.order_status) || 'ADBH',
                                       showProductDropdown: false,
                                     });
-                                    if (item.price && (!orderForm.price_usd || orderForm.price_usd === 0)) {
-                                      setOrderForm(f => ({ ...f, price_usd: item.price }));
-                                    }
                                   }}
                                   className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-[#2271b1]/10 border-b border-[#e0e0e0] flex items-center justify-between transition-colors cursor-pointer"
                                 >
@@ -2456,6 +2854,7 @@ export default function OrdersPage() {
                           )}
                         </div>
 
+                        {/* Product URL */}
                         <div>
                           <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
                             <span className="flex items-center gap-1">
@@ -2511,7 +2910,10 @@ export default function OrdersPage() {
                             </div>
                           </div>
                         </div>
+                      </div>
 
+                      {/* Row 2: Qty, Product Price ($), Order Status, Product Subtotal */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs bg-white p-3 rounded-xs border border-[#e0e0e0]">
                         <div>
                           <label className="block font-bold text-[#1d2327] mb-1">Qty *</label>
                           <input
@@ -2522,6 +2924,49 @@ export default function OrdersPage() {
                             className="w-full bg-white border border-[#8c8f94] p-2 font-bold outline-none focus:border-[#2271b1]"
                             required
                           />
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-[#1d2327] mb-1">Product Price ($) *</label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.00"
+                            value={prod.price_usd === 0 ? '' : prod.price_usd}
+                            onChange={(e) => handleUpdateProductItem(prod.id, { price_usd: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
+                            className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-emerald-700 outline-none focus:border-[#2271b1]"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-[#1d2327] mb-1">Order Status *</label>
+                          <select
+                            value={prod.order_status || 'ADBH'}
+                            onChange={(e) => handleUpdateProductItem(prod.id, { order_status: e.target.value })}
+                            className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1]"
+                            required
+                          >
+                            <option value="ADBH">ADBH</option>
+                            <option value="in stock">in stock</option>
+                            <option value="Canton">Canton</option>
+                            <option value="Doweta">Doweta</option>
+                            <option value="RBS">RBS</option>
+                            <option value="Direct Selling">Direct Selling</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-[#50575e] mb-1">Product Subtotal</label>
+                          <div className="h-9 px-3 bg-[#f6f7f7] border border-[#c3c4c7] rounded-xs flex items-center justify-between font-mono">
+                            <span className="text-[10px] text-[#50575e] font-sans font-bold">
+                              {prod.qty || 1} × ${(parseFloat(String(prod.price_usd)) || 0).toFixed(2)}
+                            </span>
+                            <span className="font-bold text-emerald-700 text-xs">
+                              ${((prod.qty || 1) * (parseFloat(String(prod.price_usd)) || 0)).toFixed(2)}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -2649,15 +3094,43 @@ export default function OrdersPage() {
                   </button>
                 </div>
 
-                {/* Order Specifications: Single Selling Price & Status */}
+                {/* Order Specifications: Summary, Selling Price & Status */}
                 <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-3">
-                  <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider border-b border-[#c3c4c7] pb-2 flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-[#00a32a]" />
-                    <span>Order Specifications & Price</span>
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#c3c4c7] pb-2">
+                    <h3 className="text-xs font-bold text-[#1d2327] uppercase tracking-wider flex items-center gap-2">
+                      <DollarSign className="w-4 h-4 text-[#00a32a]" />
+                      <span>Order Specifications & Single Order Totals</span>
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 bg-[#2271b1]/10 text-[#2271b1] border border-[#2271b1]/20 rounded-xs font-bold text-[11px]">
+                        {orderProducts.length} Product{orderProducts.length > 1 ? 's' : ''}
+                      </span>
+                      <span className="px-2 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 rounded-xs font-bold text-[11px]">
+                        {orderProducts.reduce((sum, p) => sum + (parseInt(String(p.qty)) || 1), 0)} Units Total
+                      </span>
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xs font-bold text-[11px] font-mono">
+                        Auto Sum: ${calculateTotalSellingPrice(orderProducts).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div>
-                      <label className="block font-bold text-[#1d2327] mb-1">Selling Price ($) *</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold text-[#1d2327]">Selling Price ($) *</label>
+                        {orderProducts.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const calc = calculateTotalSellingPrice(orderProducts);
+                              setOrderForm(prev => ({ ...prev, price_usd: parseFloat(calc.toFixed(2)) }));
+                            }}
+                            className="text-[10px] text-[#2271b1] hover:underline font-bold"
+                          >
+                            Reset to Sum (${calculateTotalSellingPrice(orderProducts).toFixed(2)})
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="number"
                         step="any"
@@ -2667,6 +3140,11 @@ export default function OrdersPage() {
                         className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-emerald-700 outline-none focus:border-[#2271b1]"
                         required
                       />
+                      <div className="text-[10px] text-[#50575e] mt-1">
+                        {orderProducts.length > 1
+                          ? `Total price counted from ${orderProducts.length} products in this single order.`
+                          : 'Order selling price (auto-calculated from product specification).'}
+                      </div>
                     </div>
 
                     <div>
@@ -2678,9 +3156,15 @@ export default function OrdersPage() {
                         required
                       >
                         <option value="ADBH">ADBH</option>
+                        <option value="in stock">in stock</option>
+                        <option value="Canton">Canton</option>
+                        <option value="Doweta">Doweta</option>
                         <option value="RBS">RBS</option>
                         <option value="Direct Selling">Direct Selling</option>
                       </select>
+                      <div className="text-[10px] text-[#50575e] mt-1">
+                        Primary order status for single order tracking.
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2816,22 +3300,32 @@ export default function OrdersPage() {
       {/* --- PURCHASE / IN-STOCK ENTRY MODAL --- */}
       {showPurchaseModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-[#c3c4c7] w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl rounded-sm font-sans overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className={`bg-white border border-[#c3c4c7] w-full ${isMultiProduct ? 'max-w-4xl' : 'max-w-2xl'} max-h-[90vh] flex flex-col shadow-2xl rounded-sm font-sans overflow-hidden animate-in fade-in zoom-in-95 duration-150`}>
             {/* Modal Header */}
-            <div className={`px-5 py-3.5 flex items-center justify-between border-b shrink-0 ${purchaseForm.is_in_stock ? 'bg-[#008a20] text-white border-emerald-800' : 'bg-[#1d2327] text-white border-[#2c3338]'
+            <div className={`px-5 py-3.5 flex items-center justify-between border-b shrink-0 ${purchaseForm.is_in_stock && !isMultiProduct
+              ? 'bg-[#008a20] text-white border-emerald-800'
+              : isMultiProduct
+                ? 'bg-[#6366f1] text-white border-indigo-700'
+                : 'bg-[#1d2327] text-white border-[#2c3338]'
               }`}>
               <div className="flex items-center gap-2">
-                {purchaseForm.is_in_stock ? (
+                {isMultiProduct ? (
+                  <Layers className="w-4 h-4 text-indigo-200" />
+                ) : purchaseForm.is_in_stock ? (
                   <Truck className="w-4 h-4 text-emerald-200" />
                 ) : (
                   <ShoppingBag className="w-4 h-4 text-[#72aee6]" />
                 )}
                 <h3 className="text-sm font-bold">
-                  {purchaseForm.is_in_stock ? 'In Stock Entry' : 'Purchase Entry'} for Order #{purchaseForm.order_number}
+                  {isMultiProduct ? 'Multi-Product Purchase' : purchaseForm.is_in_stock ? 'In Stock Entry' : 'Purchase Entry'} for Order #{purchaseForm.order_number}
                 </h3>
-                <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold uppercase tracking-wider ${purchaseForm.is_in_stock ? 'bg-emerald-900/60 text-emerald-200 border border-emerald-400/40' : 'bg-blue-900/60 text-blue-200 border border-blue-400/40'
+                <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold uppercase tracking-wider ${isMultiProduct
+                  ? 'bg-indigo-900/60 text-indigo-200 border border-indigo-400/40'
+                  : purchaseForm.is_in_stock
+                    ? 'bg-emerald-900/60 text-emerald-200 border border-emerald-400/40'
+                    : 'bg-blue-900/60 text-blue-200 border border-blue-400/40'
                   }`}>
-                  {purchaseForm.is_in_stock ? 'In Stock Mode' : 'Purchase Mode'}
+                  {isMultiProduct ? `${purchaseItems.length} Products` : purchaseForm.is_in_stock ? 'In Stock Mode' : 'Purchase Mode'}
                 </span>
               </div>
               <button onClick={() => setShowPurchaseModal(false)} className="text-white/80 hover:text-white font-bold text-lg leading-none">×</button>
@@ -2841,38 +3335,214 @@ export default function OrdersPage() {
               {/* Scrollable Form Body */}
               <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
                 {/* Context Summary & Cost */}
-                <div className="p-3 bg-[#f6f7f7] border border-[#c3c4c7] rounded-xs flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-[#1d2327] text-sm">{purchaseForm.product_name}</div>
-                    <div className="text-[#50575e] mt-0.5 flex items-center gap-3">
-                      <span>Company Account: <b className="text-[#1d2327]">{purchaseForm.company}</b></span>
-                      <span>Order Required Qty: <b className="text-[#2271b1]">{selectedOrderForPurchase?.qty || 1}</b></span>
-                    </div>
+                <div className="px-3.5 py-2 bg-[#f6f7f7] border border-[#c3c4c7] rounded-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-4 flex-wrap text-[#50575e]">
+                    <span>Company Account: <b className="text-[#1d2327]">{purchaseForm.company}</b></span>
+                    <span>Order Required Qty: <b className="text-[#2271b1]">{selectedOrderForPurchase?.qty || 1}</b></span>
+                    {isMultiProduct && <span>Products: <b className="text-indigo-700 font-bold">{purchaseItems.length} items</b></span>}
                   </div>
-                  <div className="bg-emerald-50 border border-emerald-300 px-3 py-1.5 rounded-xs text-right">
-                    <div className="text-[10px] text-emerald-800 font-bold uppercase">Total Purchase Cost</div>
-                    <div className="text-sm font-extrabold text-emerald-900">₹{(purchaseForm.purchase_value || 0).toFixed(2)}</div>
+                  <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded-xs">
+                    <span className="text-[10px] text-emerald-800 font-bold uppercase">Total Purchase Cost:</span>
+                    <span className="text-xs font-extrabold text-emerald-900 font-mono">₹{totalPurchaseCost.toFixed(2)}</span>
                   </div>
                 </div>
 
                 {/* Notice Banner */}
-                <div className={`p-2.5 rounded-xs border text-xs flex items-center gap-2 font-medium ${purchaseForm.is_in_stock
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
-                  : 'bg-blue-50 border-blue-300 text-blue-900'
-                  }`}>
-                  {purchaseForm.is_in_stock ? (
-                    <Truck className="w-4 h-4 text-emerald-700 shrink-0" />
-                  ) : (
-                    <ShoppingBag className="w-4 h-4 text-blue-700 shrink-0" />
-                  )}
-                  <span>
-                    {purchaseForm.is_in_stock
-                      ? 'In-Stock Mode: Enter Quantity and Purchase Price (₹) to confirm in-stock fulfillment.'
-                      : 'Purchase Mode: All fields marked with (*) are mandatory.'}
-                  </span>
-                </div>
+                {!isMultiProduct && (
+                  <div className={`p-2.5 rounded-xs border text-xs flex items-center gap-2 font-medium ${purchaseForm.is_in_stock
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                    : 'bg-blue-50 border-blue-300 text-blue-900'
+                    }`}>
+                    {purchaseForm.is_in_stock ? (
+                      <Truck className="w-4 h-4 text-emerald-700 shrink-0" />
+                    ) : (
+                      <ShoppingBag className="w-4 h-4 text-blue-700 shrink-0" />
+                    )}
+                    <span>
+                      {purchaseForm.is_in_stock
+                        ? 'In-Stock Mode: Enter Quantity and Purchase Price (₹) to confirm in-stock fulfillment.'
+                        : 'Purchase Mode: All fields marked with (*) are mandatory.'}
+                    </span>
+                  </div>
+                )}
 
-                {purchaseForm.is_in_stock ? (
+                {/* MULTI-PRODUCT MODE */}
+                {isMultiProduct ? (
+                  <div className="space-y-3">
+                    {purchaseItems.map((item, idx) => {
+                      const itemInv = inventoryList.find((inv: any) =>
+                        (inv.product_name && item.product_name && inv.product_name.toLowerCase() === item.product_name.toLowerCase())
+                      );
+                      const inStockQty = itemInv?.stock_quantity || 0;
+
+                      return (
+                        <div key={item.id} className={`border rounded-xs overflow-hidden ${item.is_in_stock ? 'border-emerald-300 bg-emerald-50/20' : 'border-[#c3c4c7] bg-white'}`}>
+                          {/* Item Header */}
+                          <div className={`px-4 py-2.5 flex items-center justify-between ${item.is_in_stock ? 'bg-emerald-100/70 border-b border-emerald-200' : 'bg-[#f0f0f1] border-b border-[#c3c4c7]'}`}>
+                            <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${item.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-[#2271b1] text-white'}`}>
+                                {idx + 1}
+                              </span>
+                              {item.product_image && (
+                                <img src={getImageUrl(item.product_image)} alt="" className="w-6 h-6 rounded-xs object-cover border border-[#c3c4c7] shrink-0" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-[#1d2327] text-xs truncate" title={item.product_name}>
+                                  {item.product_name}
+                                </div>
+                                <div className="text-[10px] text-[#50575e] flex items-center gap-2 flex-wrap">
+                                  <span>Qty: <b>{item.qty}</b></span>
+                                  {item.price_usd ? <span>Sell Price: <b>${item.price_usd.toFixed(2)}</b></span> : null}
+                                  {inStockQty > 0 && (
+                                    <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[9px] rounded-xs">
+                                      📦 {inStockQty} in inventory
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* In Stock / Purchase Toggle */}
+                            <button
+                              type="button"
+                              onClick={() => updatePurchaseItem(item.id, {
+                                is_in_stock: !item.is_in_stock,
+                                purchase_partner_name: !item.is_in_stock ? 'In-Stock Inventory' : (selectedOrderForPurchase?.seller_account || selectedOrderForPurchase?.account_name || 'Aryastore Partner'),
+                                notes: !item.is_in_stock ? 'In-Stock Order' : '',
+                              })}
+                              className={`flex items-center gap-1.5 px-3 py-1 rounded-xs text-[11px] font-bold transition-all shrink-0 cursor-pointer ${item.is_in_stock
+                                ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs'
+                                : 'bg-[#2271b1] text-white hover:bg-[#135e96] shadow-xs'
+                                }`}
+                            >
+                              {item.is_in_stock ? (
+                                <><ToggleRight className="w-3.5 h-3.5" /><span>In Stock ✓</span></>
+                              ) : (
+                                <><ToggleLeft className="w-3.5 h-3.5" /><span>Company Purchase</span></>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Item Form Fields */}
+                          <div className="px-4 py-3 space-y-2.5">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              {/* Qty */}
+                              <div>
+                                <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                  <Layers className="w-3 h-3 text-[#2271b1]" />
+                                  <span>Quantity (Qty) *</span>
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={item.qty}
+                                  onChange={(e) => updatePurchaseItem(item.id, { qty: parseInt(e.target.value) || 1 })}
+                                  className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs"
+                                  required
+                                />
+                              </div>
+
+                              {/* Purchase Cost */}
+                              <div>
+                                <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                  <DollarSign className="w-3 h-3 text-emerald-600" />
+                                  <span>{item.is_in_stock ? 'Stock Cost (INR ₹)' : 'Purchase Cost (INR ₹)'}</span>
+                                </label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={item.purchase_value === '' ? '' : item.purchase_value}
+                                  onChange={(e) => updatePurchaseItem(item.id, { purchase_value: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                                  className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs font-mono"
+                                />
+                              </div>
+
+                              {/* Company / Source */}
+                              <div>
+                                <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                  <ShoppingBag className="w-3 h-3 text-indigo-600" />
+                                  <span>Company / Channel</span>
+                                </label>
+                                <select
+                                  value={item.company || 'ADBH'}
+                                  onChange={(e) => updatePurchaseItem(item.id, { company: e.target.value })}
+                                  className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs cursor-pointer"
+                                >
+                                  {ORDER_STATUS_OPTIONS.map((st) => (
+                                    <option key={st} value={st}>{st}</option>
+                                  ))}
+                                  {companiesList.map((comp: any) => (
+                                    <option key={comp.id || comp.name} value={comp.name}>{comp.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Additional fields for purchase mode */}
+                            {!item.is_in_stock && (
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 border-t border-slate-100">
+                                <div>
+                                  <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                    <UserCheck className="w-3 h-3 text-[#2271b1]" />
+                                    <span>Vendor / Supplier *</span>
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. SMBwellness / Supplier Name"
+                                    value={item.purchase_partner_name}
+                                    onChange={(e) => updatePurchaseItem(item.id, { purchase_partner_name: e.target.value })}
+                                    className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs"
+                                    required
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                    <Calendar className="w-3 h-3 text-amber-600" />
+                                    <span>Arrived Delivery Date *</span>
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={item.estimated_shipment_date}
+                                    onChange={(e) => updatePurchaseItem(item.id, { estimated_shipment_date: e.target.value })}
+                                    className="w-full bg-white border border-[#8c8f94] p-1.5 font-semibold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs"
+                                    required
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
+                                    <Truck className="w-3 h-3 text-purple-600" />
+                                    <span>Delivery Code / OI</span>
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. OI-883921"
+                                    value={item.delivery_code}
+                                    onChange={(e) => updatePurchaseItem(item.id, { delivery_code: e.target.value })}
+                                    className="w-full bg-white border border-[#8c8f94] p-1.5 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Notes */}
+                            <div>
+                              <input
+                                type="text"
+                                placeholder="Item notes / remarks (optional)"
+                                value={item.notes}
+                                onChange={(e) => updatePurchaseItem(item.id, { notes: e.target.value })}
+                                className="w-full bg-white border border-[#c3c4c7] p-1 text-[11px] outline-none focus:border-[#2271b1] rounded-xs text-[#50575e]"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : purchaseForm.is_in_stock ? (
                   /* IN-STOCK MODE: ONLY QUANTITY & PURCHASE PRICE */
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -2947,8 +3617,6 @@ export default function OrdersPage() {
                         />
                       </div>
                     </div>
-
-
 
                     {/* Row 3: Purchase Amount & Purchase Partner */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3056,18 +3724,25 @@ export default function OrdersPage() {
                 <button
                   type="button"
                   onClick={() => setShowPurchaseModal(false)}
-                  className="px-4 py-1.5 bg-white hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-bold rounded-xs transition-colors"
+                  className="px-4 py-1.5 bg-white hover:bg-[#f0f0f1] text-[#2c3338] border border-[#c3c4c7] font-bold rounded-xs transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className={`px-5 py-1.5 font-bold rounded-xs shadow-xs text-white transition-all flex items-center gap-1.5 ${purchaseForm.is_in_stock
-                    ? 'bg-[#00a32a] hover:bg-[#008a20]'
-                    : 'bg-[#2271b1] hover:bg-[#135e96]'
+                  className={`px-5 py-1.5 font-bold rounded-xs shadow-xs text-white transition-all flex items-center gap-1.5 cursor-pointer ${isMultiProduct
+                    ? 'bg-[#6366f1] hover:bg-[#4f46e5]'
+                    : purchaseForm.is_in_stock
+                      ? 'bg-[#00a32a] hover:bg-[#008a20]'
+                      : 'bg-[#2271b1] hover:bg-[#135e96]'
                     }`}
                 >
-                  {purchaseForm.is_in_stock ? (
+                  {isMultiProduct ? (
+                    <>
+                      <Layers className="w-4 h-4" />
+                      <span>Confirm & Save Multi-Product Purchases (₹{totalPurchaseCost.toFixed(2)})</span>
+                    </>
+                  ) : purchaseForm.is_in_stock ? (
                     <>
                       <Truck className="w-4 h-4" />
                       <span>Confirm In Stock & Send to Shipments</span>
@@ -3158,8 +3833,8 @@ export default function OrdersPage() {
               {/* Error / Info */}
               {labelUploadError && (
                 <div className={`p-2.5 rounded-sm border text-[11px] flex items-start gap-2 ${labelUploadError.startsWith('Label saved')
-                    ? 'bg-amber-50 border-amber-300 text-amber-900'
-                    : 'bg-red-50 border-red-300 text-red-900'
+                  ? 'bg-amber-50 border-amber-300 text-amber-900'
+                  : 'bg-red-50 border-red-300 text-red-900'
                   }`}>
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>{labelUploadError}</span>

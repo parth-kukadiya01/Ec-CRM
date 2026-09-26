@@ -1,8 +1,8 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, status, HTTPException
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -83,6 +83,14 @@ async def lifespan(app: FastAPI):
         for c in costs:
             sync_admin_cost_share_for_month(c.month, db)
         logger.info("System startup checks completed.")
+
+        # Non-blocking background sync of S3 uploads to local cache
+        try:
+            import threading
+            from app.core.s3 import sync_s3_uploads_background
+            threading.Thread(target=sync_s3_uploads_background, args=(UPLOADS_DIR,), daemon=True).start()
+        except Exception as sync_err:
+            logger.warning(f"Could not start background S3 sync: {sync_err}")
     except Exception as e:
         logger.error(f"Startup database check error: {e}")
     finally:
@@ -115,8 +123,38 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal server error occurred. Please contact the system administrator."}
     )
 
-# Mount StaticFiles for uploaded documents
-app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+# Smart /uploads static file server with local cache and on-demand S3 fallback
+@app.api_route("/uploads/{file_path:path}", methods=["GET", "HEAD"])
+async def get_uploaded_file(file_path: str):
+    clean_path = file_path.strip().lstrip("/")
+    if not clean_path or ".." in clean_path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    abs_uploads = os.path.abspath(UPLOADS_DIR)
+
+    # Check 1: Direct local file
+    local_path = os.path.normpath(os.path.join(abs_uploads, clean_path))
+    if os.path.commonpath([abs_uploads, local_path]) == abs_uploads and os.path.isfile(local_path):
+        return FileResponse(local_path)
+
+    # Check 2: Alternate prefixes (stripping or adding leading 'uploads/')
+    if clean_path.startswith("uploads/"):
+        alt_path = os.path.normpath(os.path.join(abs_uploads, clean_path[len("uploads/"):]))
+        if os.path.commonpath([abs_uploads, alt_path]) == abs_uploads and os.path.isfile(alt_path):
+            return FileResponse(alt_path)
+    else:
+        alt_path = os.path.normpath(os.path.join(abs_uploads, "uploads", clean_path))
+        if os.path.commonpath([abs_uploads, alt_path]) == abs_uploads and os.path.isfile(alt_path):
+            return FileResponse(alt_path)
+
+    # Check 3: On-demand fetch from S3 and cache locally
+    from app.core.s3 import is_s3_enabled, find_and_cache_s3_file
+    if is_s3_enabled():
+        cached_file = find_and_cache_s3_file(clean_path, UPLOADS_DIR)
+        if cached_file and os.path.isfile(cached_file):
+            return FileResponse(cached_file)
+
+    raise HTTPException(status_code=404, detail=f"File '{clean_path}' not found")
 
 @app.get("/")
 def root():

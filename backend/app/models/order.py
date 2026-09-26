@@ -18,8 +18,8 @@ class Order(Base):
     seller_account = Column(String(150), nullable=True)
 
     product_id = Column(Integer, ForeignKey("inventory.id", ondelete="SET NULL"), nullable=True)
-    product_name = Column(String(255), nullable=False)
-    product_url = Column(String(500), nullable=True)
+    product_name = Column(Text, nullable=False)
+    product_url = Column(Text, nullable=True)
     product_image = Column(Text, nullable=True)
     product_items = Column(Text, nullable=True)
     qty = Column(Integer, nullable=False, default=1)

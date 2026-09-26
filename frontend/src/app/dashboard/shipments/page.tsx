@@ -543,6 +543,12 @@ export default function ShipmentsPage() {
       if (selectedLabelType === 'paid') {
         return !o.label_free && Number(o.label_cost_usd) > 0;
       }
+      if (selectedLabelType === 'has_label') {
+        return Boolean(o.label_pdf_url);
+      }
+      if (selectedLabelType === 'no_label') {
+        return !o.label_pdf_url;
+      }
       return true;
     })
     .filter(o => {
@@ -622,6 +628,12 @@ export default function ShipmentsPage() {
       }
       if (selectedLabelType === 'paid') {
         return !isFree && labelCost > 0;
+      }
+      if (selectedLabelType === 'has_label') {
+        return Boolean(matchingOrder?.label_pdf_url);
+      }
+      if (selectedLabelType === 'no_label') {
+        return !matchingOrder?.label_pdf_url;
       }
       return true;
     })
@@ -938,8 +950,8 @@ export default function ShipmentsPage() {
       const partnerName = isStock
         ? 'In Stock'
         : (purchaseEditForm.purchase_partner_name?.trim() === 'In Stock' || !purchaseEditForm.purchase_partner_name?.trim()
-            ? (selectedOrderForPurchaseEdit.seller_account || selectedOrderForPurchaseEdit.account_name || 'Vendor')
-            : purchaseEditForm.purchase_partner_name.trim());
+          ? (selectedOrderForPurchaseEdit.seller_account || selectedOrderForPurchaseEdit.account_name || 'Vendor')
+          : purchaseEditForm.purchase_partner_name.trim());
 
       const notesVal = isStock
         ? (purchaseEditForm.notes || 'In-Stock Order')
@@ -1489,8 +1501,10 @@ export default function ShipmentsPage() {
               className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
             >
               <option value="All">All Labels</option>
-              <option value="free">✓ Free Label Only</option>
-              <option value="paid">💵 Paid Label Only</option>
+              <option value="has_label">Label</option>
+              <option value="no_label">No Label</option>
+              <option value="free">Free Label Only</option>
+              <option value="paid">Paid Label Only</option>
             </select>
           </div>
 
@@ -1629,7 +1643,7 @@ export default function ShipmentsPage() {
             )}
             {selectedLabelType !== 'All' && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-xs font-medium">
-                Label: <b>{selectedLabelType === 'free' ? 'Free Label' : 'Paid Label'}</b>
+                Label: <b>{selectedLabelType === 'free' ? 'Free Label' : selectedLabelType === 'paid' ? 'Paid Label' : selectedLabelType === 'has_label' ? 'Has Label' : 'No Label'}</b>
                 <button onClick={() => setSelectedLabelType('All')} className="hover:text-emerald-950 font-bold ml-0.5">×</button>
               </span>
             )}

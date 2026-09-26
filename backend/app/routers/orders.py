@@ -1462,7 +1462,8 @@ async def upload_bulk_orders_file(
                     "product_url": it_url,
                     "product_image": it_image,
                     "qty": it["qty"],
-                    "price_usd": it["price_usd"]
+                    "price_usd": it["price_usd"],
+                    "order_status": it.get("order_status")
                 })
 
             product_items_json = json.dumps(product_items_list) if len(product_items_list) > 1 else None

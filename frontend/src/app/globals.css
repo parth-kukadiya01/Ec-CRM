@@ -157,29 +157,89 @@ td:last-child {
   background-color: #f8fafc;
 }
 
-/* ===== COLUMN RESIZER HANDLE ===== */
+/* ===== HORIZONTAL COLUMN RESIZER ===== */
 .col-resizer {
   position: absolute;
   top: 0;
   right: -3px;
-  width: 6px;
+  width: 7px;
   height: 100%;
   cursor: col-resize;
-  z-index: 10;
+  z-index: 25;
   background: transparent;
+  user-select: none;
+  touch-action: none;
   transition: background 0.15s ease;
 }
 
 .col-resizer:hover {
   background: #3b82f6;
-  opacity: 0.5;
-  border-radius: 3px;
+  opacity: 0.6;
 }
 
 .col-resizer-active {
   background: #2563eb !important;
-  opacity: 0.7 !important;
+  opacity: 0.9 !important;
+  box-shadow: 0 0 0 1px #1d4ed8;
 }
+
+/* ===== VERTICAL ROW RESIZER ===== */
+.row-resizer {
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 20;
+  background: transparent;
+  user-select: none;
+  touch-action: none;
+  transition: background 0.15s ease;
+}
+
+.row-resizer:hover {
+  background: #3b82f6;
+  opacity: 0.6;
+}
+
+.row-resizer-active {
+  background: #2563eb !important;
+  opacity: 0.9 !important;
+  box-shadow: 0 0 0 1px #1d4ed8;
+}
+
+/* ===== CORNER RESIZER (BOTH HORIZONTAL & VERTICAL) ===== */
+.corner-resizer {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+  z-index: 30;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.15s ease;
+}
+
+.corner-resizer:hover {
+  background: #2563eb;
+  opacity: 0.8;
+}
+
+/* Table container sticky headers and scroll management */
+.resizable-table-scroll {
+  position: relative;
+  scrollbar-width: thin;
+}
+
+.resizable-table-scroll table thead {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+
 
 /* ===== PREMIUM CARD ===== */
 .card-premium {

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date
+from sqlalchemy import Column, Integer, String, Float, Text, ForeignKey, DateTime, Date
 from sqlalchemy.orm import relationship
 from datetime import datetime, date
 from app.database import Base
@@ -9,7 +9,7 @@ class Purchase(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
     order_date = Column(Date, nullable=False, default=date.today)
-    product_name = Column(String(200), nullable=False)
+    product_name = Column(Text, nullable=False)
     purchase_value = Column(Float, nullable=False, default=0.0)
     other_cost = Column(Float, nullable=False, default=0.0)
     extra_cost = Column(Float, nullable=False, default=0.0)
@@ -18,7 +18,7 @@ class Purchase(Base):
     account_name = Column(String(150), nullable=True)
     purchase_partner_name = Column(String(150), nullable=True)
     payment_status = Column(String(50), nullable=True, default="Paid")
-    notes = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
     company = Column(String(100), nullable=True)
     qty = Column(Integer, nullable=False, default=1)
     

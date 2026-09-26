@@ -10,7 +10,7 @@ class Shipment(Base):
     order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
     shipment_partner = Column(String(100), nullable=False)
     tracking_id = Column(String(100), nullable=False, index=True)
-    product_name = Column(String(200), nullable=False)
+    product_name = Column(Text, nullable=False)
     product_image = Column(Text, nullable=True)
     weight = Column(Float, nullable=False, default=0.0) # in kg
     dimensions = Column(String(100), nullable=True) # e.g. 10x5x8 cm

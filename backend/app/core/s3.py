@@ -284,3 +284,105 @@ def check_s3_health() -> dict:
         return {"s3": "connected", "bucket": settings.S3_BUCKET_NAME}
     except Exception as e:
         return {"s3": "error", "detail": str(e)}
+
+
+def find_and_cache_s3_file(rel_path: str, uploads_dir: str) -> Optional[str]:
+    """
+    Search for a file in S3 using various candidate key patterns.
+    If found in S3, downloads and caches it locally under uploads_dir,
+    and returns the local file path. Returns None if not found or S3 unavailable.
+    """
+    from app.core.config import settings
+
+    client = _get_s3_client()
+    if not client or not settings.S3_BUCKET_NAME:
+        return None
+
+    clean = rel_path.strip().lstrip("/")
+    if not clean:
+        return None
+
+    candidates = [
+        clean,
+        f"uploads/{clean}" if not clean.startswith("uploads/") else clean,
+    ]
+    if clean.startswith("uploads/"):
+        candidates.append(clean[len("uploads/"):])
+
+    # De-duplicate preserving order
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            unique_candidates.append(c)
+
+    for cand in unique_candidates:
+        try:
+            client.head_object(Bucket=settings.S3_BUCKET_NAME, Key=cand)
+            # File exists in S3! Download to local cache
+            local_target = os.path.join(uploads_dir, cand)
+            os.makedirs(os.path.dirname(local_target), exist_ok=True)
+            client.download_file(settings.S3_BUCKET_NAME, cand, local_target)
+
+            # Also create flat alias if cand started with 'uploads/'
+            if cand.startswith("uploads/"):
+                flat_target = os.path.join(uploads_dir, cand[len("uploads/"):])
+                if not os.path.exists(flat_target):
+                    try:
+                        os.makedirs(os.path.dirname(flat_target), exist_ok=True)
+                        os.link(local_target, flat_target)
+                    except Exception:
+                        pass
+
+            # Return the file that matches the requested rel_path
+            req_target = os.path.join(uploads_dir, clean)
+            if os.path.isfile(req_target):
+                return req_target
+            return local_target
+        except Exception:
+            continue
+
+    return None
+
+
+def sync_s3_uploads_background(uploads_dir: str):
+    """
+    Background sync of all files from S3 bucket into local uploads directory cache.
+    Ensures local disk is populated with all S3 files for ultra-fast serving.
+    """
+    from app.core.config import settings
+
+    client = _get_s3_client()
+    if not client or not settings.S3_BUCKET_NAME:
+        return
+
+    try:
+        paginator = client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=settings.S3_BUCKET_NAME):
+            for obj in page.get('Contents', []):
+                key = obj.get('Key')
+                if not key or key.endswith('/'):
+                    continue
+                rel_path = key[len('uploads/'):] if key.startswith('uploads/') else key
+                dest = os.path.join(uploads_dir, rel_path)
+
+                if os.path.exists(dest) and os.path.getsize(dest) == obj.get('Size', 0):
+                    continue
+
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                try:
+                    client.download_file(settings.S3_BUCKET_NAME, key, dest)
+                    if key.startswith('uploads/'):
+                        nested_dest = os.path.join(uploads_dir, key)
+                        if not os.path.exists(nested_dest):
+                            os.makedirs(os.path.dirname(nested_dest), exist_ok=True)
+                            try:
+                                os.link(dest, nested_dest)
+                            except Exception:
+                                pass
+                except Exception as dl_err:
+                    logger.warning(f"Error caching {key} from S3: {dl_err}")
+    except Exception as e:
+        logger.warning(f"Background S3 sync error: {e}")
+
