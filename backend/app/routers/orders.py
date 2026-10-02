@@ -136,6 +136,12 @@ def get_next_shipment_id(db: Session, offset: int = 0) -> str:
     next_num = max_num + 1 + offset
     return f"{prefix}{str(next_num).zfill(digits_len)}"
 
+def is_direct_image_url(url: Optional[str]) -> bool:
+    if not url:
+        return False
+    u = url.strip().lower()
+    return any(u.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"]) or "media-amazon.com/images" in u
+
 def get_or_create_inventory_item(
     db: Session,
     product_name: str,
@@ -147,6 +153,11 @@ def get_or_create_inventory_item(
     clean_name = product_name.strip() if product_name else ""
     if not clean_name:
         return None
+
+    clean_purl = (product_url or "").strip()
+    clean_img = (image_url or "").strip()
+    if (not clean_img or "unsplash" in clean_img) and is_direct_image_url(clean_purl):
+        clean_img = clean_purl
 
     norm_name = re.sub(r'\s+', ' ', clean_name).strip()
 
@@ -163,13 +174,12 @@ def get_or_create_inventory_item(
     if item:
         # Product already exists in database: do NOT create duplicate
         changed = False
-        if image_url and (not item.image_url or "unsplash" in item.image_url):
-            item.image_url = image_url
+        if clean_img and (not item.image_url or "unsplash" in item.image_url):
+            item.image_url = clean_img
             changed = True
-        if product_url and product_url.strip():
-            clean_url = product_url.strip()
-            if not item.product_url or item.product_url.strip() != clean_url:
-                item.product_url = clean_url
+        if clean_purl:
+            if not item.product_url or item.product_url.strip() != clean_purl:
+                item.product_url = clean_purl
                 changed = True
         if price_usd and (not item.price or item.price == 0):
             item.price = price_usd
@@ -194,8 +204,8 @@ def get_or_create_inventory_item(
         sku=sku_candidate,
         category="General",
         partner_name=seller_account or "General",
-        image_url=image_url or "https://images.unsplash.com/photo-1544816155-12df9643f363?w=300",
-        product_url=product_url.strip() if product_url else None
+        image_url=clean_img or None,
+        product_url=clean_purl if clean_purl else None
     )
     db.add(item)
     db.commit()
@@ -214,42 +224,50 @@ def create_order(
     if order_in.product_id:
         inventory_item = db.query(Inventory).filter(Inventory.id == order_in.product_id).first()
 
+    raw_url = (order_in.product_url or "").strip()
+    raw_img = (order_in.product_image or "").strip()
+    if (not raw_img or "unsplash" in raw_img) and is_direct_image_url(raw_url):
+        raw_img = raw_url
+
     if not inventory_item and order_in.product_name:
         inventory_item = get_or_create_inventory_item(
             db=db,
             product_name=order_in.product_name,
             price_usd=order_in.price_usd or 0.0,
             seller_account=order_in.seller_account or order_in.company,
-            image_url=order_in.product_image,
-            product_url=order_in.product_url
+            image_url=raw_img or None,
+            product_url=raw_url or None
         )
     elif inventory_item:
         # Sync product_url and image_url to inventory_item if user provided them
         changed = False
-        if order_in.product_url and order_in.product_url.strip():
-            clean_url = order_in.product_url.strip()
-            if not inventory_item.product_url or inventory_item.product_url.strip() != clean_url:
-                inventory_item.product_url = clean_url
+        if raw_url:
+            if not inventory_item.product_url or inventory_item.product_url.strip() != raw_url:
+                inventory_item.product_url = raw_url
                 changed = True
-        if order_in.product_image and not inventory_item.image_url:
-            inventory_item.image_url = order_in.product_image
+        if raw_img and (not inventory_item.image_url or "unsplash" in inventory_item.image_url):
+            inventory_item.image_url = raw_img
             changed = True
         if changed:
             db.commit()
             db.refresh(inventory_item)
 
     # Determine effective product_url: fallback to inventory_item URL if blank
-    raw_url = (order_in.product_url or "").strip()
     effective_product_url = raw_url if raw_url else (inventory_item.product_url if inventory_item else None)
 
-    effective_product_image = order_in.product_image or (inventory_item.image_url if inventory_item else None)
+    inv_img = inventory_item.image_url if inventory_item and "unsplash" not in (inventory_item.image_url or "") else None
+    effective_product_image = raw_img or inv_img
     if not effective_product_image and effective_product_url:
-        extracted = extract_product_info_from_url(effective_product_url)
-        if extracted.get("image_url"):
-            effective_product_image = extracted["image_url"]
-            if inventory_item and not inventory_item.image_url:
-                inventory_item.image_url = effective_product_image
-                db.commit()
+        if is_direct_image_url(effective_product_url):
+            effective_product_image = effective_product_url
+        else:
+            extracted = extract_product_info_from_url(effective_product_url)
+            if extracted.get("image_url"):
+                effective_product_image = extracted["image_url"]
+
+        if effective_product_image and inventory_item and (not inventory_item.image_url or "unsplash" in inventory_item.image_url):
+            inventory_item.image_url = effective_product_image
+            db.commit()
 
     account_id = order_in.account_id
     account_name = order_in.account_name
@@ -1437,21 +1455,27 @@ async def upload_bulk_orders_file(
             primary_url = first_item["product_url"]
 
             for it in items:
+                raw_it_url = (it.get("product_url") or "").strip()
+                raw_it_img = (it.get("product_image") or "").strip()
+                if (not raw_it_img or "unsplash" in raw_it_img) and is_direct_image_url(raw_it_url):
+                    raw_it_img = raw_it_url
+
                 inv = get_or_create_inventory_item(
                     db=db,
                     product_name=it["product_name"],
                     price_usd=it["price_usd"],
                     seller_account=it["seller_account"] or it["company"],
-                    image_url=it["product_image"],
-                    product_url=it["product_url"]
+                    image_url=raw_it_img or None,
+                    product_url=raw_it_url or None
                 )
                 if inv and primary_inv_id is None:
                     primary_inv_id = inv.id
                 
-                it_image = it["product_image"] or (inv.image_url if inv else None)
-                it_url = it["product_url"] or (inv.product_url if inv else None)
+                inv_safe_img = inv.image_url if inv and "unsplash" not in (inv.image_url or "") else None
+                it_image = raw_it_img or inv_safe_img
+                it_url = raw_it_url or (inv.product_url if inv else None)
                 
-                if not primary_image and it_image:
+                if (not primary_image or "unsplash" in primary_image) and it_image:
                     primary_image = it_image
                 if not primary_url and it_url:
                     primary_url = it_url
@@ -1554,29 +1578,40 @@ def create_bulk_orders(
         inventory_item = None
         if order_in.product_id:
             inventory_item = db.query(Inventory).filter(Inventory.id == order_in.product_id).first()
+        raw_bulk_url = (order_in.product_url or "").strip()
+        raw_bulk_img = (order_in.product_image or "").strip()
+        if (not raw_bulk_img or "unsplash" in raw_bulk_img) and is_direct_image_url(raw_bulk_url):
+            raw_bulk_img = raw_bulk_url
+
         if not inventory_item and order_in.product_name:
             inventory_item = get_or_create_inventory_item(
                 db=db,
                 product_name=order_in.product_name,
                 price_usd=order_in.price_usd or 0.0,
                 seller_account=order_in.seller_account or order_in.company,
-                image_url=order_in.product_image,
-                product_url=order_in.product_url
+                image_url=raw_bulk_img or None,
+                product_url=raw_bulk_url or None
             )
-        elif inventory_item and order_in.product_url and order_in.product_url.strip():
+        elif inventory_item and raw_bulk_url:
             if not inventory_item.product_url:
-                inventory_item.product_url = order_in.product_url.strip()
+                inventory_item.product_url = raw_bulk_url
                 db.commit()
 
-        effective_product_url = (order_in.product_url or "").strip() or (inventory_item.product_url if inventory_item else None)
-        effective_product_image = order_in.product_image or (inventory_item.image_url if inventory_item else None)
+        effective_product_url = raw_bulk_url or (inventory_item.product_url if inventory_item else None)
+        inv_bulk_img = inventory_item.image_url if inventory_item and "unsplash" not in (inventory_item.image_url or "") else None
+        effective_product_image = raw_bulk_img or inv_bulk_img
+
         if not effective_product_image and effective_product_url:
-            extracted = extract_product_info_from_url(effective_product_url)
-            if extracted.get("image_url"):
-                effective_product_image = extracted["image_url"]
-                if inventory_item and not inventory_item.image_url:
-                    inventory_item.image_url = effective_product_image
-                    db.commit()
+            if is_direct_image_url(effective_product_url):
+                effective_product_image = effective_product_url
+            else:
+                extracted = extract_product_info_from_url(effective_product_url)
+                if extracted.get("image_url"):
+                    effective_product_image = extracted["image_url"]
+
+            if effective_product_image and inventory_item and (not inventory_item.image_url or "unsplash" in inventory_item.image_url):
+                inventory_item.image_url = effective_product_image
+                db.commit()
 
         order_num = order_in.order_number or f"114-{random.randint(1000000, 9999999)}-{random.randint(1000000, 9999999)}"
         shipment_num = order_in.shipment_id or first_shipment or get_next_shipment_id(db, offset=idx)

@@ -2164,10 +2164,10 @@ export default function OrdersPage() {
                                                 href={item.product_url.startsWith('http') ? item.product_url : `https://${item.product_url}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs truncate max-w-full"
+                                                className="text-[#2271b1] hover:underline inline-flex items-center gap-1 font-bold text-xs min-w-0 max-w-full"
                                                 title={item.product_name}
                                               >
-                                                <span className="truncate">{item.product_name}</span>
+                                                <span className="truncate min-w-0">{item.product_name}</span>
                                                 <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 text-[#2271b1]" />
                                               </a>
                                             ) : (
@@ -2201,10 +2201,10 @@ export default function OrdersPage() {
                                       href={ord.product_url.startsWith('http') ? ord.product_url : `https://${ord.product_url}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="text-[#2271b1] hover:underline inline-flex items-center gap-1 min-w-0 flex-1 truncate font-bold"
+                                      className="text-[#2271b1] hover:underline inline-flex items-center gap-1 min-w-0 max-w-full font-bold"
                                       title={ord.product_name}
                                     >
-                                      <span className="truncate">{ord.product_name}</span>
+                                      <span className="truncate min-w-0">{ord.product_name}</span>
                                       <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#2271b1]" />
                                     </a>
                                   ) : (
