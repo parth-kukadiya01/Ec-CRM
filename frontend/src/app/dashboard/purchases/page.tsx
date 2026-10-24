@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { purchasesApi, ordersApi, inventoryApi, authApi, getImageUrl } from '@/lib/api';
-import { ShoppingBag, CheckCircle, Clock, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, DollarSign, Truck, FileText, UserCheck, Calendar, StickyNote, CreditCard, Tag, ExternalLink, RotateCcw, ChevronLeft, ChevronRight, Search, X, Landmark, Barcode, Receipt, Package, ToggleLeft, ToggleRight } from 'lucide-react';
+import { ShoppingBag, CheckCircle, Clock, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, DollarSign, Truck, FileText, UserCheck, Calendar, StickyNote, CreditCard, Tag, ExternalLink, RotateCcw, ChevronLeft, ChevronRight, Search, X, Landmark, Barcode, Receipt, Package, ToggleLeft, ToggleRight, AlertTriangle } from 'lucide-react';
 import ResizableTable from '@/components/ResizableTable';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
@@ -37,7 +37,7 @@ export default function PurchasesPage() {
     purchase_partner_name: '',
     payment_status: 'Paid',
     notes: '',
-    company: 'ADBH',
+    company: '',
     qty: 1,
     direct_to_shipment: true,
     is_in_stock: false,
@@ -52,6 +52,7 @@ export default function PurchasesPage() {
     qty: number;
     price_usd: number;
     is_in_stock: boolean;
+    is_ofs?: boolean;
     company: string;
     purchase_value: number | '';
     purchase_partner_name: string;
@@ -260,7 +261,12 @@ export default function PurchasesPage() {
         const itemCompany = matchedPur?.company || (
           !isStatusInStock && itemStatus
             ? itemStatus
-            : (order.company || 'ADBH')
+            : (order.company || '')
+        );
+
+        const isItemOFS = Boolean(
+          (matchedPur && (matchedPur.status === 'OFS' || matchedPur.purchase_partner_name === 'OFS' || matchedPur.notes?.includes('OFS'))) ||
+          itemStatus?.toLowerCase() === 'ofs'
         );
 
         return {
@@ -271,13 +277,14 @@ export default function PurchasesPage() {
           qty: p.qty || 1,
           price_usd: p.price_usd || 0,
           is_in_stock: isItemStock,
+          is_ofs: isItemOFS,
           company: itemCompany,
           purchase_value: matchedPur ? (matchedPur.purchase_value !== undefined ? matchedPur.purchase_value : '') : (p.purchase_cost_inr || ''),
-          purchase_partner_name: matchedPur?.purchase_partner_name || (isItemStock ? 'In-Stock Inventory' : (order.seller_account || order.account_name || 'Aryastore Partner')),
+          purchase_partner_name: matchedPur?.purchase_partner_name || (isItemOFS ? 'OFS' : (isItemStock ? 'In-Stock Inventory' : (order.seller_account || order.account_name || 'Aryastore Partner'))),
           sku: matchedPur?.sku || itemInv?.sku || '',
           delivery_code: matchedPur?.delivery_code || order.oi || order.shipment_id || '',
           estimated_shipment_date: matchedPur?.estimated_shipment_date || new Date().toISOString().split('T')[0],
-          notes: matchedPur?.notes || (isItemStock ? 'In-Stock Order' : ''),
+          notes: matchedPur?.notes || (isItemOFS ? 'Out of Stock (OFS)' : (isItemStock ? 'In-Stock Order' : '')),
         };
       });
       setPurchaseItems(items);
@@ -305,7 +312,7 @@ export default function PurchasesPage() {
       purchase_partner_name: isInStock ? (order.seller_account || order.account_name || 'In-Stock Inventory') : (order.seller_account || order.account_name || 'Aryastore Partner'),
       payment_status: 'Paid',
       notes: isInStock ? 'In-Stock Purchase Entry' : '',
-      company: order.company || 'ADBH',
+      company: order.company || '',
       qty: order.qty || 1,
       direct_to_shipment: true,
       is_in_stock: isInStock,
@@ -315,6 +322,43 @@ export default function PurchasesPage() {
 
   const handleMarkInStock = (order: any) => {
     openPurchaseModal(order, true);
+  };
+
+  const handleMarkOFS = async (order: any) => {
+    if (!confirm(`Mark Order #${order.order_number} as Out of Stock (OFS)?`)) return;
+    try {
+      await purchasesApi.create({
+        order_id: order.id,
+        order_date: new Date().toISOString().split('T')[0],
+        product_name: order.product_name || 'Item',
+        sku: order.sku || null,
+        gst_type: 'GST',
+        bank: 'OFS',
+        purchase_value: 0,
+        other_cost: 0,
+        extra_cost: 0,
+        delivery_code: order.oi || order.shipment_id || null,
+        estimated_shipment_date: new Date().toISOString().split('T')[0],
+        account_name: order.account_name || null,
+        purchase_partner_name: 'OFS',
+        payment_status: 'Paid',
+        status: 'OFS',
+        notes: 'Out of Stock (OFS)',
+        company: order.company || '',
+        qty: order.qty || 1,
+        is_in_stock: false,
+      });
+
+      await ordersApi.update(order.id, {
+        status: 'OFS',
+        order_status: 'OFS'
+      });
+
+      await loadAllData();
+    } catch (err: any) {
+      console.error('Failed to mark order as OFS', err);
+      alert(err.response?.data?.detail || 'Failed to update order to OFS');
+    }
   };
 
   const handleCreatePurchase = async (e: React.FormEvent) => {
@@ -331,14 +375,15 @@ export default function PurchasesPage() {
         for (const item of purchaseItems) {
           const pVal = parseFloat(String(item.purchase_value)) || 0;
           const isStock = Boolean(item.is_in_stock);
+          const isOFS = Boolean(item.is_ofs);
           if (isStock) anyInStock = true;
-          else allInStock = false;
+          else if (!isOFS) allInStock = false;
 
-          if (!isStock && !item.purchase_partner_name?.trim()) {
+          if (!isStock && !isOFS && !item.purchase_partner_name?.trim()) {
             alert(`Please enter Vendor/Supplier Name for "${item.product_name}"`);
             return;
           }
-          if (!isStock && !item.estimated_shipment_date) {
+          if (!isStock && !isOFS && !item.estimated_shipment_date) {
             alert(`Please enter Arrived Delivery Date for "${item.product_name}"`);
             return;
           }
@@ -358,7 +403,8 @@ export default function PurchasesPage() {
         for (const item of purchaseItems) {
           const pVal = parseFloat(String(item.purchase_value)) || 0;
           const isStock = Boolean(item.is_in_stock);
-          const purStatus = isStock ? 'Received' : 'Pending';
+          const isOFS = Boolean(item.is_ofs);
+          const purStatus = isOFS ? 'OFS' : (isStock ? 'Received' : 'Pending');
 
           await purchasesApi.create({
             order_id: purchaseForm.order_id,
@@ -366,7 +412,7 @@ export default function PurchasesPage() {
             product_name: item.product_name || 'Item',
             sku: item.sku || null,
             gst_type: purchaseForm.gst_type || 'GST',
-            bank: isStock ? 'In Stock' : (purchaseForm.bank || null),
+            bank: isStock ? 'In Stock' : (isOFS ? 'OFS' : (purchaseForm.bank || null)),
             po_number: purchaseForm.po_number || null,
             purchase_value: pVal,
             other_cost: 0,
@@ -374,11 +420,11 @@ export default function PurchasesPage() {
             delivery_code: item.delivery_code || selectedOrder.oi || null,
             estimated_shipment_date: item.estimated_shipment_date || new Date().toISOString().split('T')[0],
             account_name: purchaseForm.account_name || selectedOrder.account_name || null,
-            purchase_partner_name: item.purchase_partner_name?.trim() || (isStock ? 'In Stock' : 'Self / Vendor'),
+            purchase_partner_name: isOFS ? 'OFS' : (item.purchase_partner_name?.trim() || (isStock ? 'In Stock' : 'Self / Vendor')),
             payment_status: purchaseForm.payment_status || 'Paid',
             status: purStatus,
-            notes: item.notes || (isStock ? 'In-Stock Order' : null),
-            company: item.company || purchaseForm.company || selectedOrder.company || 'ADBH',
+            notes: item.notes || (isOFS ? 'Out of Stock (OFS)' : (isStock ? 'In-Stock Order' : null)),
+            company: item.company || purchaseForm.company || selectedOrder.company || '',
             qty: parseInt(String(item.qty)) || 1,
           });
         }
@@ -394,7 +440,7 @@ export default function PurchasesPage() {
                 if (matched) {
                   return {
                     ...rawItem,
-                    order_status: matched.is_in_stock ? 'in stock' : (matched.company || 'ADBH')
+                    order_status: matched.is_ofs ? 'OFS' : (matched.is_in_stock ? 'in stock' : (matched.company || selectedOrder.company || ''))
                   };
                 }
                 return rawItem;
@@ -403,14 +449,15 @@ export default function PurchasesPage() {
           }
         } catch (e) {}
 
-        const ordStatus = allInStock ? 'In Stock' : (anyInStock ? 'ADBH' : 'Purchase Pending');
+        const allOFS = purchaseItems.length > 0 && purchaseItems.every(it => it.is_ofs);
+        const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
 
         await ordersApi.update(purchaseForm.order_id, {
           purchase_cost_inr: totalPurchaseCostAll,
           oi: purchaseItems.find(it => it.delivery_code)?.delivery_code || selectedOrder.oi,
           product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : selectedOrder.product_items,
           qty: purchaseItems.reduce((sum, it) => sum + (parseInt(String(it.qty)) || 1), 0),
-          arriving_date: purchaseItems.find(it => !it.is_in_stock)?.estimated_shipment_date || null,
+          arriving_date: purchaseItems.find(it => !it.is_in_stock && !it.is_ofs)?.estimated_shipment_date || null,
           status: ordStatus
         });
 
@@ -457,7 +504,7 @@ export default function PurchasesPage() {
           payment_status: purchaseForm.payment_status || 'Paid',
           status: purStatus,
           notes: purchaseForm.notes || (isStock ? 'In-Stock Order' : null),
-          company: purchaseForm.company || selectedOrder.company || 'ADBH',
+          company: purchaseForm.company || selectedOrder.company || '',
           qty: parseInt(String(purchaseForm.qty)) || selectedOrder.qty || 1,
         });
 
@@ -683,7 +730,7 @@ export default function PurchasesPage() {
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center">
                             <span className="px-2 py-0.5 bg-blue-100 text-blue-900 border border-blue-300 font-bold text-[10px] rounded-xs">
-                              {ord.company || 'ADBH'}
+                              {ord.company || '—'}
                             </span>
                           </td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
@@ -852,7 +899,7 @@ export default function PurchasesPage() {
 
                               if (isMulti) {
                                 return (
-                                  <div className="flex items-center justify-end">
+                                  <div className="flex items-center justify-end gap-1.5">
                                     <button
                                       onClick={() => openPurchaseModal(ord)}
                                       className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1.5 transition-all shadow-xs"
@@ -860,6 +907,14 @@ export default function PurchasesPage() {
                                     >
                                       <ShoppingBag className="w-3.5 h-3.5" />
                                       <span>Purchase</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleMarkOFS(ord)}
+                                      className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
+                                      title="Mark this order as Out of Stock (OFS)"
+                                    >
+                                      <AlertTriangle className="w-3 h-3" />
+                                      <span>OFS</span>
                                     </button>
                                   </div>
                                 );
@@ -882,6 +937,14 @@ export default function PurchasesPage() {
                                   >
                                     <Plus className="w-3 h-3" />
                                     <span>Purchase Entry</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkOFS(ord)}
+                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
+                                    title="Mark as Out of Stock (OFS)"
+                                  >
+                                    <AlertTriangle className="w-3 h-3" />
+                                    <span>OFS</span>
                                   </button>
                                 </div>
                               );
@@ -985,7 +1048,7 @@ export default function PurchasesPage() {
                       return (
                         <tr key={pur.id} data-row-id={pur.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium">{pur.order_date || '—'}</td>
-                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{pur.company || pur.account_name || 'ADBH'}</td>
+                          <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{pur.company || pur.account_name || '—'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#2271b1]">{pur.purchase_partner_name || pur.account_name || 'Aryastore Partner'}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold truncate" title={pur.product_name}>{pur.product_name}</td>
                           <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] text-[#2271b1] font-semibold">{pur.sku || '—'}</td>
@@ -1194,26 +1257,58 @@ export default function PurchasesPage() {
                               </div>
                             </div>
 
-                            {/* In Stock / Purchase Toggle */}
-                            <button
-                              type="button"
-                              onClick={() => updatePurchaseItem(item.id, {
-                                is_in_stock: !item.is_in_stock,
-                                purchase_partner_name: !item.is_in_stock ? 'In-Stock Inventory' : (selectedOrder?.seller_account || selectedOrder?.account_name || ''),
-                                notes: !item.is_in_stock ? 'In-Stock Order' : '',
-                              })}
-                              className={`flex items-center gap-1.5 px-3 py-1 rounded-xs text-[11px] font-bold transition-all shrink-0 ${
-                                item.is_in_stock
-                                  ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs'
-                                  : 'bg-[#2271b1] text-white hover:bg-[#135e96] shadow-xs'
-                              }`}
-                            >
-                              {item.is_in_stock ? (
-                                <><ToggleRight className="w-3.5 h-3.5" /><span>In Stock ✓</span></>
-                              ) : (
-                                <><ToggleLeft className="w-3.5 h-3.5" /><span>Purchase</span></>
-                              )}
-                            </button>
+                            {/* In Stock / Purchase / OFS Action Buttons */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: false,
+                                  is_ofs: false,
+                                  purchase_partner_name: selectedOrder?.seller_account || selectedOrder?.account_name || 'Aryastore Partner',
+                                  notes: '',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  !item.is_in_stock && !item.is_ofs
+                                    ? 'bg-[#2271b1] text-white shadow-xs'
+                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
+                                }`}
+                              >
+                                Purchase
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: true,
+                                  is_ofs: false,
+                                  purchase_partner_name: 'In-Stock Inventory',
+                                  notes: 'In-Stock Order',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  item.is_in_stock && !item.is_ofs
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
+                                }`}
+                              >
+                                In Stock ✓
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: false,
+                                  is_ofs: true,
+                                  purchase_partner_name: 'OFS',
+                                  purchase_value: 0,
+                                  notes: 'Out of Stock (OFS)',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  item.is_ofs
+                                    ? 'bg-rose-600 text-white shadow-xs'
+                                    : 'bg-white text-rose-700 hover:bg-rose-50 border border-rose-300'
+                                }`}
+                              >
+                                ⚠ OFS
+                              </button>
+                            </div>
                           </div>
 
                           {/* Item Form Fields */}
@@ -1238,7 +1333,7 @@ export default function PurchasesPage() {
                               <div>
                                 <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
                                   <DollarSign className="w-3 h-3 text-emerald-600" />
-                                  <span>{item.is_in_stock ? 'Stock Cost (INR ₹)' : 'Amount (₹)'}</span>
+                                  <span>{item.is_ofs ? 'Cost (INR ₹)' : item.is_in_stock ? 'Stock Cost (INR ₹)' : 'Amount (₹)'}</span>
                                 </label>
                                 <input
                                   type="number"
@@ -1257,11 +1352,12 @@ export default function PurchasesPage() {
                                   <span>Company</span>
                                 </label>
                                 <select
-                                  value={item.company || 'ADBH'}
+                                  value={item.company || ''}
                                   onChange={(e) => updatePurchaseItem(item.id, { company: e.target.value })}
                                   className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs cursor-pointer"
                                 >
-                                  {['ADBH', 'Canton', 'Doweta', 'in stock'].map(c => (
+                                  <option value="">— Select Company —</option>
+                                  {['ADBH', 'Canton', 'Doweta', 'in stock', 'OFS'].map(c => (
                                     <option key={c} value={c}>{c}</option>
                                   ))}
                                   {companyOptions.map((c: string) => (
@@ -1272,7 +1368,7 @@ export default function PurchasesPage() {
                             </div>
 
                             {/* Extra fields for purchase mode */}
-                            {!item.is_in_stock && (
+                            {!item.is_in_stock && !item.is_ofs && (
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 border-t border-slate-100">
                                 <div>
                                   <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">

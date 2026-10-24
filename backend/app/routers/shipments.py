@@ -18,8 +18,6 @@ def get_user_allowed_companies(user: User) -> Optional[List[str]]:
         return None
     if getattr(user, 'allowed_companies', None):
         return [c.strip() for c in user.allowed_companies.split(',') if c.strip()]
-    if user.email == 'ops2@crm.com':
-        return ['ADBH', 'Globle', 'Global']
     return None
 
 @router.get("", response_model=List[ShipmentResponse])
@@ -109,31 +107,57 @@ def create_shipment(
         intl = ship_in.international_cost or 0.0
         ship_cost = round(dom + intl + dump_inr + label_inr, 2)
 
-    shipment = Shipment(
-        order_id=ship_in.order_id,
-        shipment_partner=ship_in.shipment_partner,
-        tracking_id=tracking_val,
-        awb_number=ship_in.awb_number,
-        forwarding_number=ship_in.forwarding_number,
-        product_name=ship_in.product_name or order.product_name,
-        product_image=ship_in.product_image or getattr(order, 'product_image', None),
-        weight=ship_in.weight or 0.0,
-        dimensions=dim_str,
-        length=ship_in.length or 0.0,
-        width=ship_in.width or 0.0,
-        height=ship_in.height or 0.0,
-        volumetric_weight=vol_wt,
-        domestic_cost=ship_in.domestic_cost or 0.0,
-        international_cost=ship_in.international_cost or 0.0,
-        dump_cost=ship_in.dump_cost or 0.0,
-        label_cost_usd=label_usd,
-        label_free=is_free,
-        exchange_rate=rate,
-        label_cost_inr=label_inr,
-        shipment_cost=ship_cost,
-        status="In Transit"
-    )
-    db.add(shipment)
+    # Check if a shipment already exists for this order to prevent duplicate rows
+    existing_shipment = db.query(Shipment).filter(Shipment.order_id == ship_in.order_id).first()
+    if existing_shipment:
+        existing_shipment.shipment_partner = ship_in.shipment_partner
+        existing_shipment.tracking_id = tracking_val
+        existing_shipment.awb_number = ship_in.awb_number
+        existing_shipment.forwarding_number = ship_in.forwarding_number
+        existing_shipment.product_name = ship_in.product_name or order.product_name
+        existing_shipment.product_image = ship_in.product_image or getattr(order, 'product_image', None)
+        existing_shipment.weight = ship_in.weight or 0.0
+        existing_shipment.dimensions = dim_str
+        existing_shipment.length = ship_in.length or 0.0
+        existing_shipment.width = ship_in.width or 0.0
+        existing_shipment.height = ship_in.height or 0.0
+        existing_shipment.volumetric_weight = vol_wt
+        existing_shipment.domestic_cost = ship_in.domestic_cost or 0.0
+        existing_shipment.international_cost = ship_in.international_cost or 0.0
+        existing_shipment.dump_cost = ship_in.dump_cost or 0.0
+        existing_shipment.label_cost_usd = label_usd
+        existing_shipment.label_free = is_free
+        existing_shipment.exchange_rate = rate
+        existing_shipment.label_cost_inr = label_inr
+        existing_shipment.shipment_cost = ship_cost
+        existing_shipment.status = "In Transit"
+        shipment = existing_shipment
+    else:
+        shipment = Shipment(
+            order_id=ship_in.order_id,
+            shipment_partner=ship_in.shipment_partner,
+            tracking_id=tracking_val,
+            awb_number=ship_in.awb_number,
+            forwarding_number=ship_in.forwarding_number,
+            product_name=ship_in.product_name or order.product_name,
+            product_image=ship_in.product_image or getattr(order, 'product_image', None),
+            weight=ship_in.weight or 0.0,
+            dimensions=dim_str,
+            length=ship_in.length or 0.0,
+            width=ship_in.width or 0.0,
+            height=ship_in.height or 0.0,
+            volumetric_weight=vol_wt,
+            domestic_cost=ship_in.domestic_cost or 0.0,
+            international_cost=ship_in.international_cost or 0.0,
+            dump_cost=ship_in.dump_cost or 0.0,
+            label_cost_usd=label_usd,
+            label_free=is_free,
+            exchange_rate=rate,
+            label_cost_inr=label_inr,
+            shipment_cost=ship_cost,
+            status="In Transit"
+        )
+        db.add(shipment)
 
     # Mark order status as Shipped and sync carrier info
     order.status = "Shipped"
@@ -207,6 +231,15 @@ def update_shipment(
         shipment.status = ship_in.status
 
     order = db.query(Order).filter(Order.id == shipment.order_id).first()
+    allowed_comps = get_user_allowed_companies(current_user)
+    if allowed_comps and order:
+        comp_val = (order.company or "").strip().lower()
+        if not any(c.lower() in comp_val for c in allowed_comps):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Not authorized to update shipment for this company. Allowed: {', '.join(allowed_comps)}"
+            )
+
     if order:
         if ship_in.status is not None:
             order.status = ship_in.status
@@ -229,6 +262,16 @@ def delete_shipment(
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
+
+    order = db.query(Order).filter(Order.id == shipment.order_id).first()
+    allowed_comps = get_user_allowed_companies(current_user)
+    if allowed_comps and order:
+        comp_val = (order.company or "").strip().lower()
+        if not any(c.lower() in comp_val for c in allowed_comps):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Not authorized to delete shipment for this company. Allowed: {', '.join(allowed_comps)}"
+            )
 
     db.delete(shipment)
     db.commit()

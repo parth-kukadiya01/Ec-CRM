@@ -19,8 +19,6 @@ def get_user_allowed_companies(user: User) -> Optional[List[str]]:
         return None
     if getattr(user, 'allowed_companies', None):
         return [c.strip() for c in user.allowed_companies.split(',') if c.strip()]
-    if user.email == 'ops2@crm.com':
-        return ['ADBH', 'Globle', 'Global']
     return None
 
 @router.get("", response_model=List[PurchaseResponse])

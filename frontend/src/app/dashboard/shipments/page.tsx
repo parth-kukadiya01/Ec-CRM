@@ -301,10 +301,13 @@ export default function ShipmentsPage() {
       setPartnersList(partRes.data || []);
       setInventoryList(invRes.data || []);
 
-      const existingShipmentOrderIds = new Set(shipList.map((s: any) => s.order_id));
+      const existingShipmentOrderIds = new Set(
+        shipList.map((s: any) => String(s.order_id)).filter(Boolean)
+      );
       const purOrderIds = new Set(purList.map((p: any) => String(p.order_id)));
 
       // Orders with any Purchase Price (INR ₹) done or completed purchase entry show in Shipments:
+      // Exclude orders that already have a dispatched shipment so editing order status does not duplicate it into Ready tab
       const ready = allOrders.filter((ord: any) =>
         (
           purOrderIds.has(String(ord.id)) ||
@@ -312,12 +315,13 @@ export default function ShipmentsPage() {
         ) &&
         ord.status !== 'Shipped' &&
         ord.status !== 'Delivered' &&
-        ord.status !== 'Cancelled'
+        ord.status !== 'Cancelled' &&
+        !existingShipmentOrderIds.has(String(ord.id))
       );
 
       // Include all orders with status 'Shipped' or 'Delivered' so they appear in Dispatched Carrier Shipments
       const autoShippedOrders = allOrders
-        .filter((o: any) => (o.status === 'Shipped' || o.status === 'Delivered') && !existingShipmentOrderIds.has(o.id))
+        .filter((o: any) => (o.status === 'Shipped' || o.status === 'Delivered') && !existingShipmentOrderIds.has(String(o.id)))
         .map((o: any) => ({
           id: `ord-${o.id}`,
           order_id: o.id,
@@ -351,8 +355,19 @@ export default function ShipmentsPage() {
           country: o.country || 'USA',
         }));
 
+      // Combine and strictly deduplicate by order_id so no order can ever appear twice in Dispatched table
+      const seenOrderIds = new Set<string>();
+      const deduplicatedShipments: any[] = [];
+      for (const s of [...shipList, ...autoShippedOrders]) {
+        const key = s.order_id ? String(s.order_id) : `ship-${s.id}`;
+        if (!seenOrderIds.has(key)) {
+          seenOrderIds.add(key);
+          deduplicatedShipments.push(s);
+        }
+      }
+
       setReadyOrders(ready);
-      setShipments([...shipList, ...autoShippedOrders]);
+      setShipments(deduplicatedShipments);
       if (meRes?.data) setCurrentUser(meRes.data);
     } catch (err) {
       console.error(err);
@@ -453,10 +468,15 @@ export default function ShipmentsPage() {
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
     if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin' || currentUser?.role?.name === 'Super Admin') return true;
+    if (!currentUser?.allowed_companies) return true;
     const target = comp.trim().toLowerCase();
     return companyOptions.some(c => {
       const allowed = c.trim().toLowerCase();
-      return target === allowed || target.includes(allowed) || allowed.includes(target);
+      return target === allowed ||
+        target.includes(allowed) ||
+        allowed.includes(target) ||
+        (allowed === 'globle' && target.includes('global')) ||
+        (allowed === 'vetai' && target.includes('veta'));
     });
   };
 
@@ -465,7 +485,6 @@ export default function ShipmentsPage() {
     ...companiesList.map((c: any) => c.company_name).filter(Boolean),
     ...readyOrders.map((o: any) => o.company).filter(Boolean),
     ...shipments.map((s: any) => s.company).filter(Boolean),
-    ...companyOptions
   ])).filter(c => isAllowedCompany(c));
 
   // Available Carriers for filter dropdown
@@ -775,12 +794,15 @@ export default function ShipmentsPage() {
         label_cost_usd: labelUsd,
       });
 
-      // Optimistic update: add new shipment to list
+      // Optimistic update: add new shipment to list, deduplicating against any existing or auto-shipped entry
       const newShipment = res.data || { ...shipPayload, id: Date.now(), status: 'Shipped', created_at: new Date().toISOString() };
-      setShipments(prev => [...prev, newShipment]);
+      setShipments(prev => {
+        const filtered = prev.filter(s => String(s.order_id) !== String(targetOrderId) && s.id !== `ord-${targetOrderId}`);
+        return [...filtered, newShipment];
+      });
 
       // Remove from ready orders since it's now shipped
-      setReadyOrders(prev => prev.filter(o => o.id !== targetOrderId));
+      setReadyOrders(prev => prev.filter(o => String(o.id) !== String(targetOrderId)));
 
       // Update the order in allOrdersList
       setAllOrdersList(prev => prev.map(o =>
@@ -945,7 +967,7 @@ export default function ShipmentsPage() {
       setSavingPurchaseEdit(true);
 
       const targetStatus = isStock ? 'In Stock' : 'Ready to Ship';
-      const targetOrderStatus = isStock ? 'In Stock' : (selectedOrderForPurchaseEdit.company || 'ADBH');
+      const targetOrderStatus = isStock ? 'In Stock' : (selectedOrderForPurchaseEdit.company || 'Pending');
 
       const partnerName = isStock
         ? 'In Stock'
@@ -1026,7 +1048,7 @@ export default function ShipmentsPage() {
           estimated_shipment_date: purchaseEditForm.estimated_shipment_date || null,
           notes: notesVal,
           status: purStatus,
-          company: selectedOrderForPurchaseEdit.company || 'ADBH',
+          company: selectedOrderForPurchaseEdit.company || '',
           qty: newQty,
         });
         if (createdPur?.data) {
@@ -1139,7 +1161,20 @@ export default function ShipmentsPage() {
         shipment_cost: sCost,
       };
 
-      await shipmentsApi.update(editingShipment.id, updatePayload);
+      if (String(editingShipment.id).startsWith('ord-')) {
+        const res = await shipmentsApi.create({
+          order_id: Number(editingShipment.order_id),
+          ...updatePayload
+        });
+        const createdShipment = res.data || { ...editingShipment, ...updatePayload, id: Date.now() };
+        setShipments(prev => prev.map(s => s.id === editingShipment.id ? createdShipment : s));
+      } else {
+        await shipmentsApi.update(editingShipment.id, updatePayload);
+        // Optimistic update: update shipment in local state
+        setShipments(prev => prev.map(s =>
+          s.id === editingShipment.id ? { ...s, ...updatePayload } : s
+        ));
+      }
 
       if (editingShipment.order_id) {
         await ordersApi.update(editingShipment.order_id, {
@@ -1155,11 +1190,6 @@ export default function ShipmentsPage() {
             : o
         ));
       }
-
-      // Optimistic update: update shipment in local state
-      setShipments(prev => prev.map(s =>
-        s.id === editingShipment.id ? { ...s, ...updatePayload } : s
-      ));
 
       setEditingShipment(null);
     } catch (err: any) {
@@ -1785,7 +1815,7 @@ export default function ShipmentsPage() {
                           {visibleColumnsReady['order_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>}
                           {visibleColumnsReady['po_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">{pur?.po_number || '—'}</td>}
                           {visibleColumnsReady['shipment_id'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">{ord.shipment_id || ord.oi || '—'}</td>}
-                          {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>}
+                          {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || '—'}</td>}
                           {visibleColumnsReady['seller_account'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1]">{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>}
                           {visibleColumnsReady['product_name'] !== false && (
                             <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
@@ -2756,7 +2786,7 @@ export default function ShipmentsPage() {
                   <div className="flex items-center gap-4 text-slate-700">
                     <div>
                       <span className="text-[10px] text-slate-500 font-bold uppercase block">Company</span>
-                      <span className="font-semibold text-slate-900">{selectedOrderForPurchaseEdit.company || 'ADBH'}</span>
+                      <span className="font-semibold text-slate-900">{selectedOrderForPurchaseEdit.company || '—'}</span>
                     </div>
                     <div>
                       <span className="text-[10px] text-slate-500 font-bold uppercase block">Qty</span>

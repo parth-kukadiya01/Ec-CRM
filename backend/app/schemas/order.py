@@ -8,7 +8,7 @@ class OrderCreate(BaseModel):
     last_delivery_date: Optional[date] = None
     shipping_date: Optional[date] = None
 
-    company: Optional[str] = "ADBH"
+    company: Optional[str] = None
     shipment_id: Optional[str] = None
     seller_account: Optional[str] = None
 
@@ -19,7 +19,7 @@ class OrderCreate(BaseModel):
     product_items: Optional[str] = None
     qty: int = 1
     price_usd: float = 0.0
-    order_status: Optional[str] = "ADBH"
+    order_status: Optional[str] = None
     purchase_cost_inr: Optional[float] = 0.0
     oi: Optional[str] = None
     arriving_date: Optional[str] = None
@@ -42,6 +42,9 @@ class OrderCreate(BaseModel):
     label_cost_usd: Optional[float] = 0.0
     label_free: Optional[bool] = False
     label_tracking_id: Optional[str] = None
+    is_hold: Optional[bool] = False
+    hold_reason: Optional[str] = None
+    hold_at: Optional[datetime] = None
 
 class OrderUpdate(BaseModel):
     order_number: Optional[str] = None
@@ -76,6 +79,9 @@ class OrderUpdate(BaseModel):
     label_cost_usd: Optional[float] = None
     label_free: Optional[bool] = None
     label_tracking_id: Optional[str] = None
+    is_hold: Optional[bool] = None
+    hold_reason: Optional[str] = None
+    hold_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
 class OrderResponse(BaseModel):
@@ -85,7 +91,7 @@ class OrderResponse(BaseModel):
     last_delivery_date: Optional[date] = None
     shipping_date: Optional[date] = None
 
-    company: Optional[str] = "ADBH"
+    company: Optional[str] = None
     shipment_id: Optional[str] = None
     seller_account: Optional[str] = None
 
@@ -96,7 +102,7 @@ class OrderResponse(BaseModel):
     product_items: Optional[str] = None
     qty: int = 1
     price_usd: float = 0.0
-    order_status: Optional[str] = "ADBH"
+    order_status: Optional[str] = None
     p: Optional[bool] = False
     purchase_cost_inr: Optional[float] = 0.0
     oi: Optional[str] = None
@@ -124,6 +130,9 @@ class OrderResponse(BaseModel):
     label_cost_usd: Optional[float] = 0.0
     label_free: Optional[bool] = False
     label_tracking_id: Optional[str] = None
+    is_hold: Optional[bool] = False
+    hold_reason: Optional[str] = None
+    hold_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

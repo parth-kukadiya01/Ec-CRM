@@ -6,9 +6,10 @@ import re
 import random
 import string
 from datetime import datetime, date
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -54,8 +55,6 @@ def get_user_allowed_companies(user: User) -> Optional[List[str]]:
         return None
     if getattr(user, 'allowed_companies', None):
         return [c.strip() for c in user.allowed_companies.split(',') if c.strip()]
-    if user.email == 'ops2@crm.com':
-        return ['ADBH', 'Globle', 'Global']
     return None
 
 @router.get("", response_model=List[OrderResponse])
@@ -134,7 +133,23 @@ def get_next_shipment_id(db: Session, offset: int = 0) -> str:
                     max_num = num
 
     next_num = max_num + 1 + offset
-    return f"{prefix}{str(next_num).zfill(digits_len)}"
+    candidate = f"{prefix}{str(next_num).zfill(digits_len)}"
+    while db.query(Order.id).filter(Order.shipment_id == candidate).first():
+        next_num += 1
+        candidate = f"{prefix}{str(next_num).zfill(digits_len)}"
+    return candidate
+
+def split_multi_products(raw_name: str) -> List[str]:
+    if not raw_name:
+        return []
+    parts = re.split(r'\||\r?\n|;(?!\s*\d)', str(raw_name))
+    cleaned = []
+    for p in parts:
+        item = p.strip()
+        item = re.sub(r'^(?:\d+[\.\)]\s*|[\-•\*\+]\s*)', '', item).strip()
+        if item:
+            cleaned.append(item)
+    return cleaned if cleaned else [str(raw_name).strip()]
 
 def is_direct_image_url(url: Optional[str]) -> bool:
     if not url:
@@ -308,7 +323,16 @@ def create_order(
     else:
         order_num = generate_order_number(db)
 
-    shipment_num = order_in.shipment_id or get_next_shipment_id(db)
+    if order_in.shipment_id and order_in.shipment_id.strip():
+        shipment_num = order_in.shipment_id.strip()
+        existing_sid = db.query(Order).filter(Order.shipment_id == shipment_num).first()
+        if existing_sid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Shipment ID '{shipment_num}' already exists (Order #{existing_sid.order_number}). Please use a unique Shipment ID."
+            )
+    else:
+        shipment_num = get_next_shipment_id(db)
 
     order = Order(
         order_number=order_num,
@@ -325,7 +349,7 @@ def create_order(
         product_items=order_in.product_items,
         qty=order_in.qty,
         product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-        order_status=order_in.order_status or "ADBH",
+        order_status=order_in.order_status,
         purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
         arriving_date=order_in.arriving_date,
         consignee_name=order_in.consignee_name or "Consignee",
@@ -340,7 +364,10 @@ def create_order(
         account_name=account_name,
         status=order_in.status or "Pending",
         delivery_service=order_in.delivery_service,
-        shipment_cost=order_in.shipment_cost or 0.0
+        shipment_cost=order_in.shipment_cost or 0.0,
+        is_hold=bool(order_in.is_hold),
+        hold_reason=order_in.hold_reason if order_in.is_hold else None,
+        hold_at=datetime.utcnow() if order_in.is_hold else None
     )
     try:
         db.add(order)
@@ -825,7 +852,7 @@ def parse_date_flexible(val: Any) -> Optional[date]:
 def normalize_key(k: Any) -> str:
     return re.sub(r'[^a-z0-9]', '', str(k).lower().strip())
 
-def parse_file_rows(filename: str, content_bytes: bytes) -> List[List[str]]:
+def parse_file_rows(filename: str, content_bytes: bytes) -> Tuple[List[List[str]], List[List[str]]]:
     fname = filename.lower()
     if fname.endswith(".csv"):
         text = ""
@@ -839,17 +866,35 @@ def parse_file_rows(filename: str, content_bytes: bytes) -> List[List[str]]:
             raise HTTPException(status_code=400, detail="Could not decode CSV file. Please upload a valid UTF-8 CSV.")
         reader = csv.reader(io.StringIO(text))
         rows = []
+        hyperlinks = []
         for r in reader:
-            rows.append([str(c).strip() for c in r])
-        return rows
+            row_vals = []
+            row_hl = []
+            for c in r:
+                c_str = str(c).strip()
+                row_vals.append(c_str)
+                # Check for =HYPERLINK("url", ...) formula or direct URL
+                hl_match = re.search(r'HYPERLINK\s*\(\s*["\']([^"\']+)["\']', c_str, re.IGNORECASE)
+                if hl_match:
+                    row_hl.append(hl_match.group(1).strip())
+                elif c_str.startswith("http://") or c_str.startswith("https://"):
+                    row_hl.append(c_str)
+                else:
+                    row_hl.append("")
+            rows.append(row_vals)
+            hyperlinks.append(row_hl)
+        return rows, hyperlinks
     elif fname.endswith(".xlsx") or fname.endswith(".xls"):
         try:
             wb = openpyxl.load_workbook(io.BytesIO(content_bytes), data_only=True)
             sheet = wb.active
             rows = []
-            for row in sheet.iter_rows(values_only=True):
+            hyperlinks = []
+            for row in sheet.iter_rows():
                 row_vals = []
-                for val in row:
+                row_hl = []
+                for cell in row:
+                    val = cell.value
                     if val is None:
                         row_vals.append("")
                     elif isinstance(val, (datetime, date)):
@@ -858,8 +903,22 @@ def parse_file_rows(filename: str, content_bytes: bytes) -> List[List[str]]:
                         row_vals.append(str(int(val)))
                     else:
                         row_vals.append(str(val).strip())
+
+                    # Extract Excel hyperlink if present
+                    hl = ""
+                    if cell.hyperlink and cell.hyperlink.target:
+                        hl = str(cell.hyperlink.target).strip()
+                    elif isinstance(val, str):
+                        hl_match = re.search(r'HYPERLINK\s*\(\s*["\']([^"\']+)["\']', val, re.IGNORECASE)
+                        if hl_match:
+                            hl = hl_match.group(1).strip()
+                        elif val.startswith("http://") or val.startswith("https://"):
+                            hl = val.strip()
+                    row_hl.append(hl)
+
                 rows.append(row_vals)
-            return rows
+                hyperlinks.append(row_hl)
+            return rows, hyperlinks
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Could not read Excel file: {str(e)}")
     else:
@@ -1150,13 +1209,15 @@ async def upload_bulk_orders_file(
     if not content_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    rows = parse_file_rows(file.filename, content_bytes)
+    rows, hyperlinks = parse_file_rows(file.filename, content_bytes)
     
     # Filter out empty rows
     data_rows = []
-    for r in rows:
+    data_hyperlinks = []
+    for r_idx, r in enumerate(rows):
         if any(str(c).strip() for c in r):
             data_rows.append(r)
+            data_hyperlinks.append(hyperlinks[r_idx] if r_idx < len(hyperlinks) else [""] * len(r))
 
     if not data_rows or len(data_rows) < 2:
         raise HTTPException(
@@ -1199,17 +1260,29 @@ async def upload_bulk_orders_file(
     # Format: { order_number: [ { "row_idx": int, "data": dict }, ... ] }
     grouped_orders: dict[str, List[dict]] = {}
     
-    # Track order numbers seen in file to catch duplicate IDs in DB
+    # Track order numbers and shipment IDs seen in file to catch duplicate IDs
     existing_db_orders = set()
     order_numbers_in_file = set()
+    shipment_ids_in_file: dict[str, dict] = {} # sid -> {"row_idx": int, "order_number": str}
 
-    for row_idx, row in enumerate(data_rows[1:], start=2):
+    for row_offset, row in enumerate(data_rows[1:]):
+        row_idx = row_offset + 2
+        cur_hl_row = data_hyperlinks[row_offset + 1] if (row_offset + 1) < len(data_hyperlinks) else []
+
         def get_val(key: str, default="") -> str:
             idx = header_indices.get(key)
             if idx is not None and idx < len(row):
                 val = str(row[idx]).strip()
                 return val if val else default
             return default
+
+        def get_hyperlink(key: str) -> str:
+            idx = header_indices.get(key)
+            if idx is not None and idx < len(cur_hl_row):
+                hl = str(cur_hl_row[idx] or "").strip()
+                if hl.startswith("http://") or hl.startswith("https://"):
+                    return hl
+            return ""
 
         raw_order_num = get_val("order_number")
         if not raw_order_num:
@@ -1221,7 +1294,45 @@ async def upload_bulk_orders_file(
             validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): 'Product Name' is required.")
             continue
 
-        product_parts = [p.strip() for p in re.split(r'\||\r?\n', raw_product_name) if p.strip()]
+        # Extract URL / Image fallback from cell hyperlinks and embedded text
+        raw_purl = get_val("product_url")
+        purl_hl = get_hyperlink("product_url")
+        pname_hl = get_hyperlink("product_name")
+
+        # Check for URL embedded in product name text (e.g. "Item Title https://...")
+        embedded_url = ""
+        url_match = re.search(r'https?://[^\s)\]"\'>]+', raw_product_name)
+        if url_match:
+            embedded_url = url_match.group(0).strip()
+
+        row_resolved_url = ""
+        if raw_purl and (raw_purl.startswith("http://") or raw_purl.startswith("https://")):
+            row_resolved_url = raw_purl
+        elif purl_hl:
+            row_resolved_url = purl_hl
+        elif pname_hl:
+            row_resolved_url = pname_hl
+        elif embedded_url:
+            row_resolved_url = embedded_url
+
+        # Clean formula text or trailing embedded URL from product name
+        hl_formula_match = re.search(r'=HYPERLINK\s*\(\s*["\']([^"\']+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)', raw_product_name, re.IGNORECASE)
+        if hl_formula_match:
+            if not row_resolved_url:
+                row_resolved_url = hl_formula_match.group(1).strip()
+            raw_product_name = hl_formula_match.group(2).strip()
+        elif embedded_url:
+            clean_name_without_url = raw_product_name.replace(embedded_url, '').strip(' -:|')
+            if clean_name_without_url:
+                raw_product_name = clean_name_without_url
+
+        product_parts = split_multi_products(raw_product_name)
+
+        raw_pimg = get_val("product_image")
+        pimg_hl = get_hyperlink("product_image")
+        row_resolved_img = raw_pimg or pimg_hl
+        if (not row_resolved_img or "unsplash" in row_resolved_img) and is_direct_image_url(row_resolved_url):
+            row_resolved_img = row_resolved_url
 
         # Validate Optional Costs
         raw_purchase_cost = get_val("purchase_cost_inr", "0")
@@ -1274,7 +1385,7 @@ async def upload_bulk_orders_file(
                 validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}'): Invalid 'Arriving Date' ('{raw_arriving_date}'). Expected YYYY-MM-DD or DD/MM/YYYY.")
 
         # Validate Company Authorization
-        company = get_val("company", "ADBH")
+        company = get_val("company")
         if allowed_comps:
             comp_clean = company.strip().lower()
             if comp_clean and not any(c.lower() in comp_clean for c in allowed_comps):
@@ -1282,16 +1393,28 @@ async def upload_bulk_orders_file(
                     f"Row {row_idx} (Order ID '{raw_order_num}'): Not authorized to create orders for company '{company}'. Allowed: {', '.join(allowed_comps)}."
                 )
 
+        # Track shipment_id for uniqueness check
+        raw_shipment_id = get_val("shipment_id")
+        if raw_shipment_id:
+            sid_clean = raw_shipment_id.strip()
+            if sid_clean in shipment_ids_in_file and shipment_ids_in_file[sid_clean]["order_number"] != raw_order_num:
+                validation_errors.append(
+                    f"Row {row_idx} (Order ID '{raw_order_num}'): Duplicate Shipment ID '{sid_clean}' already assigned to Order ID '{shipment_ids_in_file[sid_clean]['order_number']}' in Row {shipment_ids_in_file[sid_clean]['row_idx']}. Shipment IDs must be unique."
+                )
+            else:
+                shipment_ids_in_file[sid_clean] = {"row_idx": row_idx, "order_number": raw_order_num}
+
         order_numbers_in_file.add(raw_order_num)
 
-        # Check if single row has multiple products (e.g. "Product A | Product B" or separated by newlines)
+        # Check if single row has multiple products (e.g. "Product A | Product B" or separated by newlines/semicolons)
         if len(product_parts) > 1:
             raw_qty_str = get_val("qty", "1")
-            qty_parts = [q.strip() for q in re.split(r'\||\r?\n', raw_qty_str) if q.strip()]
+            qty_parts = [q.strip() for q in re.split(r'\||\r?\n|;', raw_qty_str) if q.strip()]
             raw_price_str = get_val("price_usd", "0")
-            price_parts = [p.strip() for p in re.split(r'\||\r?\n', raw_price_str) if p.strip()]
-            url_parts = [u.strip() for u in re.split(r'\||\r?\n', get_val("product_url")) if u.strip()]
-            img_parts = [img.strip() for img in re.split(r'\||\r?\n', get_val("product_image")) if img.strip()]
+            price_parts = [p.strip() for p in re.split(r'\||\r?\n|;', raw_price_str) if p.strip()]
+            raw_url_val = get_val("product_url")
+            url_parts = [u.strip() for u in re.split(r'\||\r?\n|;', raw_url_val) if u.strip()]
+            img_parts = [img.strip() for img in re.split(r'\||\r?\n|;', get_val("product_image")) if img.strip()]
 
             for p_idx, p_name in enumerate(product_parts):
                 # Qty for sub-product
@@ -1326,8 +1449,8 @@ async def upload_bulk_orders_file(
                     validation_errors.append(f"Row {row_idx} (Order ID '{raw_order_num}', Product #{p_idx+1} '{p_name}'): 'Price ($)' must be a valid numeric amount (got '{cur_price_str}').")
                     p_price_val = 0.0
 
-                p_url = url_parts[p_idx] if p_idx < len(url_parts) else (url_parts[0] if len(url_parts) == 1 else "")
-                p_img = img_parts[p_idx] if p_idx < len(img_parts) else (img_parts[0] if len(img_parts) == 1 else "")
+                p_url = url_parts[p_idx] if p_idx < len(url_parts) else (url_parts[0] if len(url_parts) == 1 else row_resolved_url)
+                p_img = img_parts[p_idx] if p_idx < len(img_parts) else (img_parts[0] if len(img_parts) == 1 else row_resolved_img)
 
                 sub_item = {
                     "row_idx": row_idx,
@@ -1344,7 +1467,7 @@ async def upload_bulk_orders_file(
                     "product_image": p_img,
                     "qty": p_qty_val,
                     "price_usd": p_price_val,
-                    "order_status": get_val("order_status", "ADBH"),
+                    "order_status": get_val("order_status"),
                     "consignee_name": get_val("consignee_name", "Consignee"),
                     "shipment_address_1": get_val("shipment_address_1"),
                     "shipment_address_2": get_val("shipment_address_2"),
@@ -1392,11 +1515,11 @@ async def upload_bulk_orders_file(
                 "shipment_id": get_val("shipment_id"),
                 "seller_account": get_val("seller_account", acc_name or ""),
                 "product_name": product_parts[0],
-                "product_url": get_val("product_url"),
-                "product_image": get_val("product_image"),
+                "product_url": row_resolved_url,
+                "product_image": row_resolved_img,
                 "qty": qty_val,
                 "price_usd": price_val,
-                "order_status": get_val("order_status", "ADBH"),
+                "order_status": get_val("order_status"),
                 "consignee_name": get_val("consignee_name", "Consignee"),
                 "shipment_address_1": get_val("shipment_address_1"),
                 "shipment_address_2": get_val("shipment_address_2"),
@@ -1419,6 +1542,13 @@ async def upload_bulk_orders_file(
         for (exist_num,) in existing_orders:
             first_row_idx = grouped_orders[exist_num][0]["row_idx"] if exist_num in grouped_orders else "Unknown"
             validation_errors.append(f"Row {first_row_idx}: Order ID '{exist_num}' already exists in the system. Duplicate order IDs are not allowed.")
+
+    # Check for existing duplicate Shipment IDs in database
+    if shipment_ids_in_file:
+        existing_sids = db.query(Order.shipment_id, Order.order_number).filter(Order.shipment_id.in_(list(shipment_ids_in_file.keys()))).all()
+        for (exist_sid, exist_ord_num) in existing_sids:
+            first_row_idx = shipment_ids_in_file[exist_sid]["row_idx"]
+            validation_errors.append(f"Row {first_row_idx}: Shipment ID '{exist_sid}' already exists in the system (Order ID '{exist_ord_num}'). Shipment IDs must be unique.")
 
     # ZERO TOLERANCE: If ANY error occurred, abort entire transaction and return errors
     if validation_errors:
@@ -1510,15 +1640,15 @@ async def upload_bulk_orders_file(
                 product_items=product_items_json,
                 qty=total_qty,
                 product_price=total_price,
-                order_status=first_item["order_status"] or "ADBH",
+                order_status=first_item["order_status"],
                 purchase_cost_inr=total_purchase_cost,
                 shipment_cost=total_shipment_cost,
-                consignee_name=first_item["consignee_name"] or "Consignee",
-                shipment_address_1=first_item["shipment_address_1"] or "",
-                shipment_address_2=first_item["shipment_address_2"] or "",
-                city=first_item["city"] or "",
-                state=first_item["state"] or "",
-                zip_code=first_item["zip_code"] or "",
+                consignee_name=first_item["consignee_name"],
+                shipment_address_1=first_item["shipment_address_1"],
+                shipment_address_2=first_item["shipment_address_2"],
+                city=first_item["city"],
+                state=first_item["state"],
+                zip_code=first_item["zip_code"],
                 mobile_number=first_item["mobile_number"] or "",
                 country=first_item["country"] or "USA",
                 account_id=acc_id,
@@ -1638,7 +1768,7 @@ def create_bulk_orders(
             product_image=effective_product_image,
             qty=order_in.qty or 1,
             product_price=getattr(order_in, 'product_price', None) or order_in.price_usd or 0.0,
-            order_status=order_in.order_status or "ADBH",
+            order_status=order_in.order_status,
             purchase_cost_inr=order_in.purchase_cost_inr or 0.0,
             arriving_date=order_in.arriving_date,
             consignee_name=order_in.consignee_name or "Consignee",
@@ -1727,6 +1857,15 @@ def update_order(
 
     old_status = order.status
 
+    if order_in.shipment_id and order_in.shipment_id.strip():
+        new_sid = order_in.shipment_id.strip()
+        existing_sid = db.query(Order).filter(Order.shipment_id == new_sid, Order.id != order_id).first()
+        if existing_sid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Shipment ID '{new_sid}' already belongs to another order (#{existing_sid.order_number}). Please use a unique Shipment ID."
+            )
+
     for field, value in order_in.dict(exclude_unset=True).items():
         if field == "price_usd" and value is not None:
             order.product_price = value
@@ -1780,6 +1919,34 @@ def update_order(
     if new_month and new_month != old_month:
         sync_admin_cost_share_for_month(new_month, db)
 
+    db.refresh(order)
+    populate_order_costs(order, db)
+    return order
+
+class ToggleHoldPayload(BaseModel):
+    reason: Optional[str] = None
+
+@router.post("/{order_id}/toggle-hold", response_model=OrderResponse)
+def toggle_order_hold(
+    order_id: int,
+    payload: Optional[ToggleHoldPayload] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_permission("orders:write"))
+):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    check_order_access(order, current_user)
+
+    order.is_hold = not bool(order.is_hold)
+    if order.is_hold:
+        order.hold_reason = payload.reason if payload and payload.reason else "Order placed on hold"
+        order.hold_at = datetime.utcnow()
+    else:
+        order.hold_reason = None
+        order.hold_at = None
+
+    db.commit()
     db.refresh(order)
     populate_order_costs(order, db)
     return order

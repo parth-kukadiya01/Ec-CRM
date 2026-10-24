@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { ordersApi } from '@/lib/api';
+import { toast } from '@/components/Toast';
 import {
   Upload,
   FileSpreadsheet,
@@ -95,7 +96,7 @@ export default function BulkUploadOrdersModal({
       await ordersApi.downloadSampleTemplate(format);
     } catch (err) {
       console.error('Failed to download template:', err);
-      alert('Failed to download sample template. Please try again.');
+      toast.error('Failed to download sample template. Please try again.', 'Template Download Error');
     } finally {
       if (format === 'csv') setDownloadingCsv(false);
       else setDownloadingXlsx(false);

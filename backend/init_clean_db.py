@@ -141,6 +141,15 @@ def init_clean_db():
             ]
         )
 
+        orders_shipments_role = get_or_create_role(
+            "Orders & Shipments Specialist",
+            "Access to Orders management and Shipments fulfillment",
+            [
+                "orders:read", "orders:write", "orders:delete",
+                "shipments:read", "shipments:write", "shipments:delete"
+            ]
+        )
+
         print("✓ Configured system roles and permission mappings.")
 
         # 5. Initialize Standard Users from pass.txt
@@ -217,10 +226,21 @@ def init_clean_db():
                 "password": "user123",
                 "is_admin": False,
                 "role_id": ops_role.id,
-                "allowed_companies": "ADBH,Globle,Global",
+                "allowed_companies": None,
                 "phone": "9876543215",
                 "department": "Operations",
-                "job_title": "Fulfillment Executive (ADBH & Global only)"
+                "job_title": "Fulfillment Executive 2 (All Companies)"
+            },
+            {
+                "email": "canton@crm.com",
+                "full_name": "Canton Executive",
+                "password": "user123",
+                "is_admin": False,
+                "role_id": orders_shipments_role.id,
+                "allowed_companies": "canton,Canton",
+                "phone": "9876543216",
+                "department": "Operations",
+                "job_title": "Orders & Shipments Executive (Canton Only)"
             }
         ]
 

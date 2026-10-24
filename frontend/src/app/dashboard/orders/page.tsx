@@ -5,6 +5,7 @@ import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi,
 import ResizableTable from '@/components/ResizableTable';
 import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
 import BulkUploadOrdersModal from '@/components/BulkUploadOrdersModal';
+import { toast } from '@/components/Toast';
 import {
   ShoppingCart,
   Plus,
@@ -43,11 +44,14 @@ import {
   Tag,
   Settings2,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  PauseCircle,
+  PlayCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
-const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta'];
+const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta', 'OFS'];
 
 interface PurchaseItem {
   id: string;
@@ -58,6 +62,7 @@ interface PurchaseItem {
   qty: number;
   price_usd?: number;
   is_in_stock: boolean;
+  is_ofs?: boolean;
   company: string;
   purchase_value: number | '';
   purchase_partner_name: string;
@@ -186,6 +191,7 @@ export default function OrdersPage() {
   const [selectedCompany, setSelectedCompany] = useState<string>('All');
   const [selectedSellerAccount, setSelectedSellerAccount] = useState<string>('All');
   const [selectedPurchaseStatus, setSelectedPurchaseStatus] = useState<string>('All');
+  const [selectedHoldStatus, setSelectedHoldStatus] = useState<'All' | 'hold' | 'active'>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [dateFieldType, setDateFieldType] = useState<string>('order_process_date');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -219,6 +225,10 @@ export default function OrdersPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingOrder, setEditingOrder] = useState<any>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [modalFieldErrors, setModalFieldErrors] = useState<{ shipment_id?: string; order_number?: string }>({});
+  const [purchaseModalError, setPurchaseModalError] = useState<string | null>(null);
+  const addModalFormRef = useRef<HTMLFormElement>(null);
 
   // Purchase Modal for In Stock & Purchase Entry
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
@@ -241,7 +251,7 @@ export default function OrdersPage() {
     purchase_partner_name: '',
     payment_status: 'Paid',
     notes: '',
-    company: 'ADBH',
+    company: '',
     qty: 1,
     direct_to_shipment: true,
     is_in_stock: false,
@@ -381,7 +391,7 @@ export default function OrdersPage() {
     shipping_date: '',
     last_delivery_date: '',
     arriving_date: '',
-    company: 'ADBH',
+    company: '',
     shipment_id: '',
     order_number: '',
     seller_account: '',
@@ -390,7 +400,7 @@ export default function OrdersPage() {
     product_image: '',
     qty: 1,
     price_usd: 0,
-    order_status: 'ADBH',
+    order_status: '',
     consignee_name: '',
     shipment_address_1: '',
     shipment_address_2: '',
@@ -399,11 +409,11 @@ export default function OrdersPage() {
     zip_code: '',
     mobile_number: '',
     country: 'USA',
-    status: 'ADBH'
+    status: 'Pending'
   });
 
   // Multi-Product Form State for Orders
-  const createBlankProduct = (defaultStatus = 'ADBH') => ({
+  const createBlankProduct = (defaultStatus = '') => ({
     id: 'prod_' + Math.random().toString(36).substring(2, 9),
     product_id: undefined as number | undefined,
     product_name: '',
@@ -420,7 +430,7 @@ export default function OrdersPage() {
   });
 
   type ProductItemType = ReturnType<typeof createBlankProduct>;
-  const [orderProducts, setOrderProducts] = useState<ProductItemType[]>([createBlankProduct()]);
+  const [orderProducts, setOrderProducts] = useState<ProductItemType[]>([createBlankProduct('')]);
 
   const calculateTotalSellingPrice = (items: ProductItemType[]) => {
     return items.reduce((sum, p) => {
@@ -432,7 +442,7 @@ export default function OrdersPage() {
 
   const handleAddProductItem = () => {
     setOrderProducts(prev => {
-      const next = [...prev, createBlankProduct(orderForm.order_status || 'ADBH')];
+      const next = [...prev, createBlankProduct(orderForm.order_status || '')];
       const newTotal = calculateTotalSellingPrice(next);
       setOrderForm(f => ({ ...f, price_usd: parseFloat(newTotal.toFixed(2)) }));
       return next;
@@ -714,20 +724,22 @@ export default function OrdersPage() {
   const isAllowedCompany = (comp?: string) => {
     if (!comp) return true;
     if (currentUser?.is_admin || currentUser?.role_name === 'Super Admin') return true;
+    if (!currentUser?.allowed_companies) return true;
     const target = comp.trim().toLowerCase();
     return companyOptions.some(c => {
       const allowed = c.trim().toLowerCase();
-      return target === allowed || target.includes(allowed) || allowed.includes(target);
-    }) ||
-      companiesList.some((c: any) => c.company_name?.toLowerCase() === comp.toLowerCase()) ||
-      partnersList.some((p: any) => p.partner_name?.toLowerCase() === comp.toLowerCase());
+      return target === allowed ||
+        target.includes(allowed) ||
+        allowed.includes(target) ||
+        (allowed === 'globle' && target.includes('global')) ||
+        (allowed === 'vetai' && target.includes('veta'));
+    });
   };
 
   const companyItems = Array.from(new Set([
     ...companiesList.map((c: any) => c.company_name).filter(Boolean),
     ...orders.map((o: any) => o.company).filter(Boolean),
-    ...companyOptions
-  ]));
+  ])).filter(c => isAllowedCompany(c));
   const partnerItems = Array.from(new Set(
     partnersList.map((p: any) => p.partner_name).filter(Boolean)
   ));
@@ -788,9 +800,15 @@ export default function OrdersPage() {
       });
     } else if (selectedStatus !== 'All') {
       result = result.filter(o => {
-        const s = o.order_status || 'ADBH';
+        const s = o.order_status || '';
         return s.toLowerCase() === selectedStatus.toLowerCase();
       });
+    }
+
+    if (selectedHoldStatus === 'hold') {
+      result = result.filter(o => Boolean(o.is_hold));
+    } else if (selectedHoldStatus === 'active') {
+      result = result.filter(o => !Boolean(o.is_hold));
     }
 
     if (selectedPurchaseStatus !== 'All') {
@@ -804,15 +822,22 @@ export default function OrdersPage() {
             matchingPur.bank === 'In Stock'
           )
         );
-        const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+        const isPurchaseDone = Boolean(matchingPur && !isStockDone && matchingPur.status !== 'OFS');
+        const isOFSDone = Boolean(
+          matchingPur?.status === 'OFS' ||
+          matchingPur?.purchase_partner_name === 'OFS' ||
+          o.status === 'OFS' ||
+          (o.order_status && o.order_status.toLowerCase() === 'ofs')
+        );
 
         if (selectedPurchaseStatus === 'due') {
-          if (isStockDone || isPurchaseDone) return false;
+          if (isStockDone || isPurchaseDone || isOFSDone) return false;
           return getDuePurchaseDate(o.last_delivery_date, o.shipping_date) !== null;
         }
         if (selectedPurchaseStatus === 'in_stock') return isStockDone;
         if (selectedPurchaseStatus === 'purchased') return isPurchaseDone;
-        if (selectedPurchaseStatus === 'pending') return !isStockDone && !isPurchaseDone;
+        if (selectedPurchaseStatus === 'ofs') return isOFSDone;
+        if (selectedPurchaseStatus === 'pending') return !isStockDone && !isPurchaseDone && !isOFSDone;
         return true;
       });
     }
@@ -864,6 +889,7 @@ export default function OrdersPage() {
       selectedCompany,
       selectedSellerAccount,
       selectedPurchaseStatus,
+      selectedHoldStatus,
       selectedStatus,
       dateFieldType,
       searchQuery,
@@ -882,6 +908,7 @@ export default function OrdersPage() {
     selectedCompany,
     selectedSellerAccount,
     selectedPurchaseStatus,
+    selectedHoldStatus,
     selectedStatus,
     dateFieldType,
     searchQuery,
@@ -1011,9 +1038,16 @@ export default function OrdersPage() {
 
   const handleStatusChange = async (orderId: number, newStatus: string) => {
     try {
-      // Only update order_status — never touch status (which is the purchase workflow status)
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, order_status: newStatus } : o));
-      await ordersApi.update(orderId, { order_status: newStatus });
+      const isHold = newStatus.toLowerCase() === 'hold';
+      setOrders(prev => prev.map(o => o.id === orderId ? {
+        ...o,
+        order_status: newStatus,
+        ...(isHold ? { is_hold: true, hold_reason: o.hold_reason || 'Status set to Hold' } : (o.order_status?.toLowerCase() === 'hold' ? { is_hold: false } : {}))
+      } : o));
+      await ordersApi.update(orderId, {
+        order_status: newStatus,
+        ...(isHold ? { is_hold: true, hold_reason: 'Status set to Hold' } : (orders.find(o => o.id === orderId)?.order_status?.toLowerCase() === 'hold' ? { is_hold: false } : {}))
+      });
     } catch (err) {
       console.error('Failed to update status', err);
       loadData();
@@ -1089,7 +1123,12 @@ export default function OrdersPage() {
         const itemCompany = matchedPur?.company || (
           !isStatusInStock && itemStatus
             ? itemStatus
-            : (order.company || 'ADBH')
+            : (order.company || '')
+        );
+
+        const isItemOFS = Boolean(
+          (matchedPur && (matchedPur.status === 'OFS' || matchedPur.purchase_partner_name === 'OFS' || matchedPur.notes?.includes('OFS'))) ||
+          itemStatus?.toLowerCase() === 'ofs'
         );
 
         return {
@@ -1101,13 +1140,14 @@ export default function OrdersPage() {
           qty: p.qty || 1,
           price_usd: p.price_usd || 0,
           is_in_stock: isItemStock,
+          is_ofs: isItemOFS,
           company: itemCompany,
           purchase_value: matchedPur ? (matchedPur.purchase_value !== undefined ? matchedPur.purchase_value : '') : (p.purchase_cost_inr || ''),
-          purchase_partner_name: matchedPur?.purchase_partner_name || (isItemStock ? 'In-Stock Inventory' : (order.seller_account || order.account_name || 'Aryastore Partner')),
+          purchase_partner_name: matchedPur?.purchase_partner_name || (isItemOFS ? 'OFS' : (isItemStock ? 'In-Stock Inventory' : (order.seller_account || order.account_name || 'Aryastore Partner'))),
           sku: matchedPur?.sku || itemInv?.sku || '',
           delivery_code: matchedPur?.delivery_code || order.oi || order.shipment_id || '',
           estimated_shipment_date: matchedPur?.estimated_shipment_date || new Date().toISOString().split('T')[0],
-          notes: matchedPur?.notes || (isItemStock ? 'In-Stock Order' : ''),
+          notes: matchedPur?.notes || (isItemOFS ? 'Out of Stock (OFS)' : (isItemStock ? 'In-Stock Order' : '')),
         };
       });
       setPurchaseItems(items);
@@ -1137,11 +1177,12 @@ export default function OrdersPage() {
       purchase_partner_name: existingPur?.purchase_partner_name || (isStock ? (order.seller_account || order.account_name || 'In-Stock Inventory') : (order.seller_account || order.account_name || 'Aryastore Partner')),
       payment_status: existingPur?.payment_status || 'Paid',
       notes: existingPur?.notes || (isStock ? 'In-Stock Purchase Entry' : ''),
-      company: existingPur?.company || order.company || 'ADBH',
+      company: existingPur?.company || order.company || '',
       qty: existingPur?.qty || order.qty || 1,
       direct_to_shipment: true,
       is_in_stock: isStock,
     });
+    setPurchaseModalError(null);
     setShowPurchaseModal(true);
   };
 
@@ -1154,6 +1195,7 @@ export default function OrdersPage() {
     if (!selectedOrderForPurchase) return;
 
     const currentScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+    setPurchaseModalError(null);
 
     try {
       if (isMultiProduct && purchaseItems.length > 0) {
@@ -1161,15 +1203,21 @@ export default function OrdersPage() {
         let totalPurchaseCostAll = 0;
         let allInStock = true;
         let anyInStock = false;
+        let allOFS = true;
 
         for (const item of purchaseItems) {
           const pVal = parseFloat(String(item.purchase_value)) || 0;
           const isStock = Boolean(item.is_in_stock);
+          const isOFS = Boolean(item.is_ofs);
           if (isStock) anyInStock = true;
           else allInStock = false;
 
-          if (!isStock && !item.purchase_partner_name?.trim()) {
-            alert(`Please enter Vendor / Supplier Name for "${item.product_name}"`);
+          if (!isOFS) allOFS = false;
+
+          if (!isStock && !isOFS && !item.purchase_partner_name?.trim()) {
+            const warnMsg = `Please enter Vendor / Supplier Name for "${item.product_name}"`;
+            setPurchaseModalError(warnMsg);
+            toast.warning(warnMsg, 'Vendor Name Required');
             return;
           }
           totalPurchaseCostAll += pVal;
@@ -1189,7 +1237,8 @@ export default function OrdersPage() {
         for (const item of purchaseItems) {
           const pVal = parseFloat(String(item.purchase_value)) || 0;
           const isStock = Boolean(item.is_in_stock);
-          const purStatus = isStock ? 'Received' : 'Purchased';
+          const isOFS = Boolean(item.is_ofs);
+          const purStatus = isOFS ? 'OFS' : (isStock ? 'Received' : 'Purchased');
 
           const res = await purchasesApi.create({
             order_id: selectedOrderForPurchase.id,
@@ -1197,7 +1246,7 @@ export default function OrdersPage() {
             product_name: item.product_name || 'Item',
             sku: item.sku || null,
             gst_type: purchaseForm.gst_type || 'GST',
-            bank: isStock ? 'In Stock' : (purchaseForm.bank || null),
+            bank: isStock ? 'In Stock' : (isOFS ? 'OFS' : (purchaseForm.bank || null)),
             po_number: purchaseForm.po_number || null,
             purchase_value: pVal,
             other_cost: 0,
@@ -1205,11 +1254,11 @@ export default function OrdersPage() {
             delivery_code: item.delivery_code || selectedOrderForPurchase.oi || null,
             estimated_shipment_date: item.estimated_shipment_date || new Date().toISOString().split('T')[0],
             account_name: purchaseForm.account_name || selectedOrderForPurchase.account_name || null,
-            purchase_partner_name: isStock ? 'In Stock' : (item.purchase_partner_name?.trim() || 'Aryastore Partner'),
+            purchase_partner_name: isOFS ? 'OFS' : (isStock ? 'In Stock' : (item.purchase_partner_name?.trim() || 'Aryastore Partner')),
             payment_status: purchaseForm.payment_status || 'Paid',
             status: purStatus,
-            notes: item.notes || (isStock ? 'In-Stock Order' : null),
-            company: item.company || selectedOrderForPurchase.company || 'ADBH',
+            notes: item.notes || (isOFS ? 'Out of Stock (OFS)' : (isStock ? 'In-Stock Order' : null)),
+            company: item.company || selectedOrderForPurchase.company || '',
             qty: parseInt(String(item.qty)) || 1,
             is_in_stock: isStock,
           });
@@ -1227,7 +1276,7 @@ export default function OrdersPage() {
                 if (matched) {
                   return {
                     ...rawItem,
-                    order_status: matched.is_in_stock ? 'in stock' : (matched.company || 'ADBH')
+                    order_status: matched.is_ofs ? 'OFS' : (matched.is_in_stock ? 'in stock' : (matched.company || selectedOrderForPurchase.company || ''))
                   };
                 }
                 return rawItem;
@@ -1236,14 +1285,14 @@ export default function OrdersPage() {
           }
         } catch (e) { }
 
-        const ordStatus = allInStock ? 'In Stock' : (anyInStock ? 'ADBH' : 'Purchase Pending');
+        const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
 
         await ordersApi.update(selectedOrderForPurchase.id, {
           purchase_cost_inr: totalPurchaseCostAll,
           oi: purchaseItems.find(it => it.delivery_code)?.delivery_code || selectedOrderForPurchase.oi,
           product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : selectedOrderForPurchase.product_items,
           qty: purchaseItems.reduce((sum, it) => sum + (parseInt(String(it.qty)) || 1), 0),
-          arriving_date: purchaseItems.find(it => !it.is_in_stock)?.estimated_shipment_date || null,
+          arriving_date: purchaseItems.find(it => !it.is_in_stock && !it.is_ofs)?.estimated_shipment_date || null,
           status: ordStatus
         });
 
@@ -1271,17 +1320,23 @@ export default function OrdersPage() {
       // Single Product original flow
       const pVal = parseFloat(String(purchaseForm.purchase_value));
       if (isNaN(pVal) || pVal < 0) {
-        alert('Please enter a valid Purchase Price / Amount (INR ₹)');
+        const warnMsg = 'Please enter a valid Purchase Price / Amount (INR ₹)';
+        setPurchaseModalError(warnMsg);
+        toast.warning(warnMsg, 'Invalid Price');
         return;
       }
 
       if (!purchaseForm.is_in_stock) {
         if (!purchaseForm.purchase_partner_name?.trim()) {
-          alert('Please enter the Vendor / Supplier Name');
+          const warnMsg = 'Please enter the Vendor / Supplier Name';
+          setPurchaseModalError(warnMsg);
+          toast.warning(warnMsg, 'Vendor Name Required');
           return;
         }
         if (!purchaseForm.estimated_shipment_date) {
-          alert('Please enter the Arrived Delivery Date');
+          const warnMsg = 'Please enter the Arrived Delivery Date';
+          setPurchaseModalError(warnMsg);
+          toast.warning(warnMsg, 'Delivery Date Required');
           return;
         }
       }
@@ -1307,7 +1362,7 @@ export default function OrdersPage() {
         payment_status: purchaseForm.payment_status || 'Paid',
         status: purStatus,
         notes: purchaseForm.notes || (isStock ? 'In-Stock Order' : null),
-        company: purchaseForm.company || selectedOrderForPurchase.company || 'ADBH',
+        company: purchaseForm.company || selectedOrderForPurchase.company || '',
         qty: parseInt(String(purchaseForm.qty)) || selectedOrderForPurchase.qty || 1,
         is_in_stock: isStock,
         created_at: new Date().toISOString()
@@ -1349,7 +1404,7 @@ export default function OrdersPage() {
         payment_status: purchaseForm.payment_status || 'Paid',
         status: purStatus,
         notes: purchaseForm.notes || (isStock ? 'In-Stock Order' : null),
-        company: purchaseForm.company || selectedOrderForPurchase.company || 'ADBH',
+        company: purchaseForm.company || selectedOrderForPurchase.company || '',
         qty: parseInt(String(purchaseForm.qty)) || selectedOrderForPurchase.qty || 1,
       });
 
@@ -1362,6 +1417,7 @@ export default function OrdersPage() {
       });
 
       setShowPurchaseModal(false);
+      toast.success(`Purchase entry saved for Order #${selectedOrderForPurchase.order_number}`, 'Purchase Saved');
       await loadData(false);
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: currentScrollY, behavior: 'instant' });
@@ -1369,7 +1425,61 @@ export default function OrdersPage() {
     } catch (err: any) {
       console.error(err);
       const msg = err.response?.data?.detail || 'Error saving purchase entry';
-      alert(msg);
+      setPurchaseModalError(msg);
+      toast.error(msg, 'Purchase Save Failed');
+    }
+  };
+
+  const handleMarkOFS = async (order: any) => {
+    if (!confirm(`Mark Order #${order.order_number} as Out Of Stock (OFS)?`)) return;
+    try {
+      await purchasesApi.create({
+        order_id: order.id,
+        order_date: new Date().toISOString().split('T')[0],
+        product_name: order.product_name || 'Item',
+        gst_type: 'GST',
+        purchase_value: 0,
+        other_cost: 0,
+        extra_cost: 0,
+        delivery_code: order.oi || order.shipment_id || null,
+        account_name: order.account_name || null,
+        purchase_partner_name: 'OFS',
+        payment_status: 'Paid',
+        status: 'OFS',
+        notes: 'Marked as Out of Stock (OFS)',
+        company: order.company || '',
+        qty: order.qty || 1,
+        is_in_stock: false,
+      });
+
+      await ordersApi.update(order.id, {
+        status: 'OFS',
+        order_status: 'OFS'
+      });
+
+      toast.success(`Order #${order.order_number} marked as OFS`, 'Status Updated');
+      await loadData(false);
+    } catch (err: any) {
+      console.error('Failed to mark order as OFS', err);
+      toast.error(err.response?.data?.detail || 'Failed to update order to OFS', 'OFS Status Error');
+    }
+  };
+
+  const handleToggleHold = async (order: any) => {
+    try {
+      const willHold = !order.is_hold;
+      let reason = '';
+      if (willHold) {
+        reason = prompt(`Enter reason for putting Order #${order.order_number} on hold (optional):`, 'Review required') || 'Review required';
+      }
+      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, is_hold: willHold, hold_reason: willHold ? reason : null } : o));
+      await ordersApi.toggleHold(order.id, reason);
+      toast.success(`Order #${order.order_number} ${willHold ? 'placed on hold' : 'resumed'}`, 'Hold Status Updated');
+      await loadData(false);
+    } catch (err: any) {
+      console.error('Failed to toggle hold status', err);
+      toast.error(err.response?.data?.detail || 'Failed to update hold status', 'Hold Status Error');
+      await loadData(false);
     }
   };
 
@@ -1378,10 +1488,11 @@ export default function OrdersPage() {
     try {
       setOrders(prev => prev.filter(o => o.id !== orderId));
       await ordersApi.delete(orderId);
+      toast.success('Order deleted successfully', 'Order Deleted');
     } catch (err: any) {
       console.error('Failed to delete order', err);
       const msg = err.response?.data?.detail || 'Failed to delete order.';
-      alert(msg);
+      toast.error(msg, 'Delete Order Failed');
       loadData();
     }
   };
@@ -1391,7 +1502,7 @@ export default function OrdersPage() {
     if (urlFetchTimeoutRef.current) clearTimeout(urlFetchTimeoutRef.current);
     setFetchingUrlImage(false);
     setUrlFetchStatus(null);
-    const defaultCompany = companyItems[0] || (partnerItems[0] || 'ADBH');
+    const defaultCompany = companyItems[0] || (partnerItems[0] || '');
     const initialAccounts = getAccountsForEntity(defaultCompany);
     const defaultSellerAccount = initialAccounts.length === 1 ? initialAccounts[0] : '';
     setOrderForm({
@@ -1409,7 +1520,7 @@ export default function OrdersPage() {
       product_image: '',
       qty: 1,
       price_usd: 0,
-      order_status: 'ADBH',
+      order_status: '',
       consignee_name: '',
       shipment_address_1: '',
       shipment_address_2: '',
@@ -1418,27 +1529,66 @@ export default function OrdersPage() {
       zip_code: '',
       mobile_number: '',
       country: '',
-      status: 'ADBH'
+      status: ''
     });
-    setOrderProducts([createBlankProduct('ADBH')]);
+    setOrderProducts([createBlankProduct('')]);
     setSellerSearch(defaultSellerAccount);
+    setModalError(null);
+    setModalFieldErrors({});
     setShowAddModal(true);
   };
 
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError(null);
+    setModalFieldErrors({});
+
     try {
       const validProducts = orderProducts.map(p => ({
         ...p,
         product_name: p.product_name.trim(),
         qty: parseInt(String(p.qty)) || 1,
         price_usd: parseFloat(String(p.price_usd)) || 0,
-        order_status: p.order_status || orderForm.order_status || 'ADBH',
+        order_status: p.order_status || orderForm.order_status || '',
       }));
 
       for (let i = 0; i < validProducts.length; i++) {
         if (!validProducts[i].product_name) {
-          alert(`Please enter a Product Name for Product #${i + 1}`);
+          const errMsg = `Please enter a Product Name for Product #${i + 1}`;
+          setModalError(errMsg);
+          toast.warning(errMsg, 'Product Required');
+          return;
+        }
+      }
+
+      // Check client-side for duplicate Shipment ID
+      const enteredSid = orderForm.shipment_id?.trim();
+      if (enteredSid) {
+        const dupSidOrder = orders.find(o => o.shipment_id && o.shipment_id.trim().toLowerCase() === enteredSid.toLowerCase());
+        if (dupSidOrder) {
+          const errMsg = `Shipment ID '${enteredSid}' already exists (Order #${dupSidOrder.order_number}). Please use a unique Shipment ID.`;
+          setModalError(errMsg);
+          setModalFieldErrors({ shipment_id: errMsg });
+          toast.error(errMsg, 'Duplicate Shipment ID');
+          if (addModalFormRef.current) {
+            addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+          return;
+        }
+      }
+
+      // Check client-side for duplicate Order ID
+      const enteredOid = orderForm.order_number?.trim();
+      if (enteredOid) {
+        const dupOidOrder = orders.find(o => o.order_number && o.order_number.trim().toLowerCase() === enteredOid.toLowerCase());
+        if (dupOidOrder) {
+          const errMsg = `Order ID '${enteredOid}' already exists. Please enter a unique Order ID.`;
+          setModalError(errMsg);
+          setModalFieldErrors({ order_number: errMsg });
+          toast.error(errMsg, 'Duplicate Order ID');
+          if (addModalFormRef.current) {
+            addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+          }
           return;
         }
       }
@@ -1480,7 +1630,7 @@ export default function OrdersPage() {
         product_items: productItemsJson,
         qty: totalQty,
         price_usd: finalPrice,
-        order_status: orderForm.order_status || validProducts[0]?.order_status || 'ADBH',
+        order_status: orderForm.order_status || validProducts[0]?.order_status || '',
         consignee_name: orderForm.consignee_name || 'Consignee',
         shipment_address_1: orderForm.shipment_address_1 || '',
         shipment_address_2: orderForm.shipment_address_2 || '',
@@ -1494,11 +1644,28 @@ export default function OrdersPage() {
 
       await ordersApi.create(payload);
       setShowAddModal(false);
+      setModalError(null);
+      setModalFieldErrors({});
+      toast.success(`Order #${finalOrderNumber} created successfully!`, 'Order Created');
       loadData(false);
     } catch (err: any) {
       console.error('Failed to create order', err);
       const msg = err.response?.data?.detail || 'Error creating order. Please check inputs.';
-      alert(msg);
+      setModalError(msg);
+
+      const fieldErrors: { shipment_id?: string; order_number?: string } = {};
+      if (msg.toLowerCase().includes('shipment id')) {
+        fieldErrors.shipment_id = msg;
+      }
+      if (msg.toLowerCase().includes('order id')) {
+        fieldErrors.order_number = msg;
+      }
+      setModalFieldErrors(fieldErrors);
+
+      toast.error(msg, 'Unable to Create Order');
+      if (addModalFormRef.current) {
+        addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   };
 
@@ -1531,7 +1698,7 @@ export default function OrdersPage() {
         product_image: p.product_image || '',
         qty: p.qty || 1,
         price_usd: p.price_usd !== undefined ? (parseFloat(String(p.price_usd)) || 0) : (ord.price_usd || ord.product_price || 0),
-        order_status: p.order_status || ord.order_status || 'ADBH',
+        order_status: p.order_status || ord.order_status || '',
         fetchingUrlImage: false,
         urlFetchStatus: null,
         isDraggingImage: false,
@@ -1547,7 +1714,7 @@ export default function OrdersPage() {
         product_image: ord.product_image || matchedInv?.image_url || '',
         qty: ord.qty || 1,
         price_usd: ord.price_usd || ord.product_price || 0,
-        order_status: ord.order_status || 'ADBH',
+        order_status: ord.order_status || '',
         fetchingUrlImage: false,
         urlFetchStatus: null,
         isDraggingImage: false,
@@ -1571,7 +1738,7 @@ export default function OrdersPage() {
       product_image: ord.product_image || matchedInv?.image_url || '',
       qty: ord.qty || 1,
       price_usd: ord.price_usd || ord.product_price || 0,
-      order_status: ord.order_status || 'ADBH',
+      order_status: ord.order_status || '',
       consignee_name: ord.consignee_name || ord.buyer_name || '',
       shipment_address_1: ord.shipment_address_1 || '',
       shipment_address_2: ord.shipment_address_2 || '',
@@ -1583,24 +1750,63 @@ export default function OrdersPage() {
       status: ord.status || 'Pending'
     });
     setSellerSearch(ord.seller_account);
+    setModalError(null);
+    setModalFieldErrors({});
     setShowEditModal(true);
   };
 
   const handleUpdateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingOrder) return;
+    setModalError(null);
+    setModalFieldErrors({});
+
     try {
       const validProducts = orderProducts.map(p => ({
         ...p,
         product_name: p.product_name.trim(),
         qty: parseInt(String(p.qty)) || 1,
         price_usd: parseFloat(String(p.price_usd)) || 0,
-        order_status: p.order_status || orderForm.order_status || 'ADBH',
+        order_status: p.order_status || orderForm.order_status || '',
       }));
 
       for (let i = 0; i < validProducts.length; i++) {
         if (!validProducts[i].product_name) {
-          alert(`Please enter a Product Name for Product #${i + 1}`);
+          const errMsg = `Please enter a Product Name for Product #${i + 1}`;
+          setModalError(errMsg);
+          toast.warning(errMsg, 'Product Required');
+          return;
+        }
+      }
+
+      // Check client-side for duplicate Shipment ID against other orders
+      const enteredSid = orderForm.shipment_id?.trim();
+      if (enteredSid) {
+        const dupSidOrder = orders.find(o => o.id !== editingOrder.id && o.shipment_id && o.shipment_id.trim().toLowerCase() === enteredSid.toLowerCase());
+        if (dupSidOrder) {
+          const errMsg = `Shipment ID '${enteredSid}' already belongs to another order (#${dupSidOrder.order_number}). Please use a unique Shipment ID.`;
+          setModalError(errMsg);
+          setModalFieldErrors({ shipment_id: errMsg });
+          toast.error(errMsg, 'Duplicate Shipment ID');
+          if (addModalFormRef.current) {
+            addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+          return;
+        }
+      }
+
+      // Check client-side for duplicate Order ID against other orders
+      const enteredOid = orderForm.order_number?.trim();
+      if (enteredOid) {
+        const dupOidOrder = orders.find(o => o.id !== editingOrder.id && o.order_number && o.order_number.trim().toLowerCase() === enteredOid.toLowerCase());
+        if (dupOidOrder) {
+          const errMsg = `Order ID '${enteredOid}' already exists in another order. Please enter a unique Order ID.`;
+          setModalError(errMsg);
+          setModalFieldErrors({ order_number: errMsg });
+          toast.error(errMsg, 'Duplicate Order ID');
+          if (addModalFormRef.current) {
+            addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+          }
           return;
         }
       }
@@ -1635,7 +1841,7 @@ export default function OrdersPage() {
         qty: totalQty,
         price_usd: finalPrice,
         status: orderForm.status || editingOrder.status || 'Pending',
-        order_status: orderForm.order_status || validProducts[0]?.order_status || 'ADBH',
+        order_status: orderForm.order_status || validProducts[0]?.order_status || '',
         order_process_date: orderForm.order_process_date || null,
         shipping_date: orderForm.shipping_date || null,
         last_delivery_date: orderForm.last_delivery_date || null,
@@ -1644,11 +1850,28 @@ export default function OrdersPage() {
       await ordersApi.update(editingOrder.id, payload);
       setShowEditModal(false);
       setEditingOrder(null);
+      setModalError(null);
+      setModalFieldErrors({});
+      toast.success(`Order #${payload.order_number} updated successfully!`, 'Order Saved');
       loadData();
     } catch (err: any) {
       console.error('Failed to update order', err);
       const msg = err.response?.data?.detail || 'Error updating order.';
-      alert(msg);
+      setModalError(msg);
+
+      const fieldErrors: { shipment_id?: string; order_number?: string } = {};
+      if (msg.toLowerCase().includes('shipment id')) {
+        fieldErrors.shipment_id = msg;
+      }
+      if (msg.toLowerCase().includes('order id')) {
+        fieldErrors.order_number = msg;
+      }
+      setModalFieldErrors(fieldErrors);
+
+      toast.error(msg, 'Unable to Update Order');
+      if (addModalFormRef.current) {
+        addModalFormRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   };
 
@@ -1725,8 +1948,9 @@ export default function OrdersPage() {
         label_free: labelFreeInput,
       } : o));
       setShowLabelModal(false);
+      toast.success('Label cost updated successfully', 'Label Saved');
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save label cost.');
+      toast.error(err.response?.data?.detail || 'Failed to save label cost.', 'Label Cost Error');
     }
   };
 
@@ -1751,6 +1975,14 @@ export default function OrdersPage() {
     item.product_name?.toLowerCase().includes((orderForm.product_name || '').toLowerCase()) ||
     item.sku?.toLowerCase().includes((orderForm.product_name || '').toLowerCase())
   );
+
+  const duplicateShipmentOrder = (showAddModal || showEditModal) && orderForm.shipment_id?.trim()
+    ? orders.find(o => o.shipment_id && o.shipment_id.trim().toLowerCase() === orderForm.shipment_id.trim().toLowerCase() && o.id !== editingOrder?.id)
+    : null;
+
+  const duplicateOrderNumberOrder = (showAddModal || showEditModal) && orderForm.order_number?.trim()
+    ? orders.find(o => o.order_number && o.order_number.trim().toLowerCase() === orderForm.order_number.trim().toLowerCase() && o.id !== editingOrder?.id)
+    : null;
 
   return (
     <div className="space-y-4">
@@ -1852,8 +2084,34 @@ export default function OrdersPage() {
               )}
             </button>
 
+            {/* On Hold Filter Pill */}
+            {(() => {
+              const holdCount = orders.filter(o => isAllowedCompany(o.company) && o.is_hold).length;
+              return (
+                <button
+                  onClick={() => setSelectedHoldStatus(selectedHoldStatus === 'hold' ? 'All' : 'hold')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${
+                    selectedHoldStatus === 'hold'
+                      ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                      : holdCount > 0
+                        ? 'bg-amber-50 text-amber-900 border-amber-400 hover:bg-amber-100'
+                        : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                  }`}
+                  title="Orders placed on hold"
+                >
+                  <PauseCircle className={`w-3.5 h-3.5 ${selectedHoldStatus === 'hold' ? 'text-white' : holdCount > 0 ? 'text-amber-700 animate-pulse' : 'text-[#50575e]'}`} />
+                  <span>On Hold</span>
+                  {holdCount > 0 && (
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${selectedHoldStatus === 'hold' ? 'bg-white text-amber-700' : 'bg-amber-600 text-white'}`}>
+                      {holdCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
+
             {ORDER_STATUS_OPTIONS.map(st => {
-              const count = orders.filter(o => isAllowedCompany(o.company) && (o.order_status || 'ADBH').toLowerCase() === st.toLowerCase()).length;
+              const count = orders.filter(o => isAllowedCompany(o.company) && (o.order_status || '').toLowerCase() === st.toLowerCase()).length;
               return (
                 <button
                   key={st}
@@ -1870,12 +2128,13 @@ export default function OrdersPage() {
           </div>
 
           {/* Quick Clear Button */}
-          {(selectedCompany !== 'All' || selectedSellerAccount !== 'All' || selectedPurchaseStatus !== 'All' || selectedStatus !== 'All' || startDate || endDate || searchQuery) && (
+          {(selectedCompany !== 'All' || selectedSellerAccount !== 'All' || selectedPurchaseStatus !== 'All' || selectedHoldStatus !== 'All' || selectedStatus !== 'All' || startDate || endDate || searchQuery) && (
             <button
               onClick={() => {
                 setSelectedCompany('All');
                 setSelectedSellerAccount('All');
                 setSelectedPurchaseStatus('All');
+                setSelectedHoldStatus('All');
                 setSelectedStatus('All');
                 setDateFieldType('order_process_date');
                 setStartDate('');
@@ -1938,6 +2197,7 @@ export default function OrdersPage() {
               <option value="due">⚠️ Due Purchase (≤ 5d)</option>
               <option value="in_stock">🚚 In Stock</option>
               <option value="purchased">✓ Purchased</option>
+              <option value="ofs">⚠ OFS (Out of Stock)</option>
               <option value="pending">⏳ Pending Purchase</option>
             </select>
           </div>
@@ -2107,7 +2367,7 @@ export default function OrdersPage() {
                       : (companyColorMap[ord.company] || 'bg-slate-100 text-slate-900 border-slate-300');
 
                     return (
-                      <tr key={ord.id} data-row-id={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
+                      <tr key={ord.id} data-row-id={ord.id} className={`group ${isEven ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap ${ord.is_hold ? 'border-l-4 border-l-amber-500 bg-amber-50/50' : ''}`}>
                         {visibleColumns.no !== false && (
                           <td className="py-2 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#50575e]">
                             {(currentPage - 1) * pageSize + index + 1}
@@ -2120,12 +2380,26 @@ export default function OrdersPage() {
                         {visibleColumns.company !== false && (
                           <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
                             <span className={`inline-flex items-center justify-center px-2.5 py-0.5 min-w-[70px] text-[11px] font-bold rounded-xs border ${companyBadgeStyle}`}>
-                              {ord.company || 'ADBH'}
+                              {ord.company || '—'}
                             </span>
                           </td>
                         )}
                         {visibleColumns.shipment_id !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>}
-                        {visibleColumns.order_number !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">{ord.order_number}</td>}
+                        {visibleColumns.order_number !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">
+                            <div className="flex items-center gap-1.5">
+                              <span>{ord.order_number}</span>
+                              {ord.is_hold && (
+                                <span
+                                  className="px-1.5 py-0.5 bg-amber-500 text-white font-black text-[9px] rounded-xs uppercase tracking-wider inline-flex items-center gap-0.5 shadow-xs shrink-0"
+                                  title={ord.hold_reason || 'Order is on hold'}
+                                >
+                                  <PauseCircle className="w-2.5 h-2.5" /> HOLD
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        )}
                         {visibleColumns.seller_account !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium truncate" title={ord.seller_account}>{ord.seller_account || ''}</td>}
                         {/* Product Name (handles single & multi-product cleanly) */}
                         {visibleColumns.product_name !== false && (
@@ -2258,26 +2532,34 @@ export default function OrdersPage() {
                         {visibleColumns.order_status !== false && (
                           <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
                             {(() => {
-                              const cur = (ord.order_status || 'ADBH').trim();
+                              const cur = (ord.order_status || '').trim();
                               const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
                               const s = matchedStatus.toLowerCase();
                               const colorClass =
                                 (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
-                                  s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
-                                    s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
-                                      s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
-                                        'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200';
+                                  s === 'ofs' ? 'bg-rose-100 text-rose-900 border-rose-300 hover:bg-rose-200 font-extrabold' :
+                                    s === 'hold' ? 'bg-amber-100 text-amber-900 border-amber-400 hover:bg-amber-200 font-extrabold ring-1 ring-amber-400' :
+                                      s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
+                                        s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
+                                          s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
+                                            'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200';
                               return (
                                 <select
-                                  value={matchedStatus}
+                                  value={matchedStatus || ''}
                                   onChange={(e) => handleStatusChange(ord.id, e.target.value)}
                                   className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
                                 >
+                                  {!matchedStatus && <option value="" className="bg-white text-[#50575e]">—</option>}
                                   {ORDER_STATUS_OPTIONS.map((status) => (
                                     <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
                                       {status}
                                     </option>
                                   ))}
+                                  {matchedStatus && !ORDER_STATUS_OPTIONS.some(o => o.toLowerCase() === matchedStatus.toLowerCase()) && (
+                                    <option value={matchedStatus} className="bg-white text-[#1d2327] font-bold">
+                                      {matchedStatus}
+                                    </option>
+                                  )}
                                 </select>
                               );
                             })()}
@@ -2314,20 +2596,25 @@ export default function OrdersPage() {
                                           ) || matchingPurs[i];
 
                                           const isStock = pur ? Boolean(pur.is_in_stock || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock' || pur.notes?.includes('In-Stock')) : false;
+                                          const isOFS = pur ? Boolean(pur.status === 'OFS' || pur.purchase_partner_name === 'OFS' || pur.notes?.includes('OFS')) : (item.order_status?.toLowerCase() === 'ofs');
 
                                           return (
                                             <div key={i} className="flex items-center justify-between text-[10px] bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-xs gap-1">
                                               <span className="truncate max-w-[85px] font-semibold text-[#1d2327]" title={item.product_name}>
                                                 P{i + 1}: {item.product_name}
                                               </span>
-                                              {pur ? (
-                                                isStock ? (
+                                              {pur || isOFS ? (
+                                                isOFS ? (
+                                                  <span className="px-1.5 py-0.2 bg-rose-100 text-rose-800 border border-rose-300 font-extrabold rounded-xs text-[9px] shrink-0">
+                                                    ⚠ OFS
+                                                  </span>
+                                                ) : isStock ? (
                                                   <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold rounded-xs text-[9px] shrink-0">
                                                     ✓ In Stock
                                                   </span>
                                                 ) : (
-                                                  <span className="px-1.5 py-0.2 bg-blue-100 text-blue-900 border border-blue-300 font-extrabold rounded-xs text-[9px] shrink-0 truncate max-w-[85px]" title={pur.company ? `Purchased (${pur.company})` : 'Purchased'}>
-                                                    ✓ {pur.company || 'Purchased'}
+                                                  <span className="px-1.5 py-0.2 bg-blue-100 text-blue-900 border border-blue-300 font-extrabold rounded-xs text-[9px] shrink-0 truncate max-w-[85px]" title={pur?.company ? `Purchased (${pur.company})` : 'Purchased'}>
+                                                    ✓ {pur?.company || 'Purchased'}
                                                   </span>
                                                 )
                                               ) : (
@@ -2338,7 +2625,7 @@ export default function OrdersPage() {
                                         })}
                                       </div>
 
-                                      <div className="flex items-center justify-center gap-1 mt-0.5">
+                                      <div className="flex items-center justify-center gap-1.5 mt-0.5">
                                         <button
                                           onClick={() => openPurchaseModal(ord)}
                                           className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#2271b1]/10 text-[#2271b1] hover:bg-[#2271b1] hover:text-white rounded-xs text-[10px] font-bold transition-colors border border-[#2271b1]/30"
@@ -2346,6 +2633,14 @@ export default function OrdersPage() {
                                         >
                                           <Edit2 className="w-2.5 h-2.5" />
                                           <span>Edit</span>
+                                        </button>
+                                        <button
+                                          onClick={() => handleMarkOFS(ord)}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-700 hover:bg-rose-600 hover:text-white rounded-xs text-[10px] font-bold transition-colors border border-rose-200"
+                                          title="Mark this Order as OFS"
+                                        >
+                                          <AlertTriangle className="w-2.5 h-2.5" />
+                                          <span>OFS</span>
                                         </button>
                                       </div>
                                     </div>
@@ -2364,6 +2659,14 @@ export default function OrdersPage() {
                                         <ShoppingBag className="w-3.5 h-3.5" />
                                         <span>Purchase</span>
                                       </button>
+                                      <button
+                                        onClick={() => handleMarkOFS(ord)}
+                                        className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0"
+                                        title="Mark this order as Out of Stock (OFS)"
+                                      >
+                                        <AlertTriangle className="w-3 h-3" />
+                                        <span>OFS</span>
+                                      </button>
                                     </div>
                                     {dueInfo && (
                                       <span className={`px-2 py-0.5 rounded-xs text-[10px] font-bold border inline-flex items-center gap-1 whitespace-nowrap shadow-2xs ${dueInfo.isOverdue ? 'bg-red-100 text-red-900 border-red-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`} title={`Purchase Due Date: ${dueInfo.formatted}`}>
@@ -2375,16 +2678,42 @@ export default function OrdersPage() {
                                 );
                               }
 
+                              const isOFSDone = Boolean(
+                                (matchingPur && (
+                                  matchingPur.status === 'OFS' ||
+                                  matchingPur.purchase_partner_name === 'OFS' ||
+                                  matchingPur.notes?.includes('OFS')
+                                )) ||
+                                ord.order_status?.toLowerCase() === 'ofs' ||
+                                ord.status?.toLowerCase() === 'ofs'
+                              );
                               const isStockDone = Boolean(
-                                matchingPur && (
+                                !isOFSDone && matchingPur && (
                                   matchingPur.is_in_stock ||
                                   matchingPur.notes?.includes('In-Stock') ||
                                   matchingPur.purchase_partner_name === 'In Stock' ||
                                   matchingPur.bank === 'In Stock'
                                 )
                               );
-                              const isPurchaseDone = Boolean(matchingPur && !isStockDone);
+                              const isPurchaseDone = Boolean(!isOFSDone && matchingPur && !isStockDone);
                               const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
+
+                              if (isOFSDone) {
+                                return (
+                                  <div className="flex flex-col items-center justify-center gap-0.5">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-xs bg-rose-100 text-rose-900 border border-rose-300 shadow-xs">
+                                        <AlertTriangle className="w-3 h-3 text-rose-700" />
+                                        <span>OFS</span>
+                                      </span>
+                                      <button onClick={() => openPurchaseModal(ord, false)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Purchase / OFS Entry">
+                                        <Edit2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    {actionTimestamp && <span className="text-[10px] text-[#50575e] font-mono whitespace-nowrap">{actionTimestamp}</span>}
+                                  </div>
+                                );
+                              }
                               if (isStockDone) {
                                 return (
                                   <div className="flex flex-col items-center justify-center gap-0.5">
@@ -2421,11 +2750,14 @@ export default function OrdersPage() {
                               return (
                                 <div className="flex flex-col items-center justify-center gap-1.5 py-0.5">
                                   <div className="flex items-center justify-center gap-1.5">
-                                    <button onClick={() => handleMarkInStock(ord)} className="px-2.5 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Item is already in stock">
+                                    <button onClick={() => handleMarkInStock(ord)} className="px-2 py-1 bg-[#00a32a] hover:bg-[#008a20] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Item is already in stock">
                                       <Truck className="w-3 h-3" /><span>In Stock</span>
                                     </button>
-                                    <button onClick={() => openPurchaseModal(ord)} className="px-2.5 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Create purchase order entry">
-                                      <Plus className="w-3 h-3" /><span>Purchase Entry</span>
+                                    <button onClick={() => openPurchaseModal(ord)} className="px-2 py-1 bg-[#2271b1] hover:bg-[#135e96] text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Create purchase order entry">
+                                      <Plus className="w-3 h-3" /><span>Purchase</span>
+                                    </button>
+                                    <button onClick={() => handleMarkOFS(ord)} className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] rounded-xs flex items-center gap-1 transition-all shadow-xs shrink-0" title="Mark as Out of Stock (OFS)">
+                                      <AlertTriangle className="w-3 h-3" /><span>OFS</span>
                                     </button>
                                   </div>
                                   {dueInfo && (
@@ -2462,6 +2794,17 @@ export default function OrdersPage() {
                         {visibleColumns.actions !== false && (
                           <td className={`py-2 px-3 text-center sticky right-0 border-l border-[#c3c4c7] shadow-[-2px_0_4px_rgba(0,0,0,0.06)] z-10 ${isEven ? 'bg-white group-hover:bg-[#e8f3fc]' : 'bg-[#f6f7f7] group-hover:bg-[#e8f3fc]'}`}>
                             <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => handleToggleHold(ord)}
+                                className={`p-1 rounded-xs transition-all ${
+                                  ord.is_hold
+                                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 ring-1 ring-amber-400'
+                                    : 'hover:bg-amber-500 hover:text-white text-amber-700'
+                                }`}
+                                title={ord.is_hold ? `Order is ON HOLD (${ord.hold_reason || 'No reason specified'}). Click to Release from Hold` : 'Put Order on Hold'}
+                              >
+                                {ord.is_hold ? <PlayCircle className="w-3.5 h-3.5 text-amber-700" /> : <PauseCircle className="w-3.5 h-3.5" />}
+                              </button>
                               <button onClick={() => openEditModal(ord)} className="p-1 hover:bg-[#2271b1] hover:text-white text-[#2271b1] rounded-xs transition-colors" title="Edit Order"><Edit2 className="w-3.5 h-3.5" /></button>
                               <button onClick={() => handleDeleteOrder(ord.id)} className="p-1 hover:bg-red-600 hover:text-white text-red-600 rounded-xs transition-colors" title="Delete Order"><Trash2 className="w-3.5 h-3.5" /></button>
                             </div>
@@ -2546,7 +2889,38 @@ export default function OrdersPage() {
               </button>
             </div>
 
-            <form onSubmit={showEditModal ? handleUpdateOrder : handleCreateOrder} className="p-5 space-y-5 overflow-y-auto text-xs">
+            <form ref={addModalFormRef} onSubmit={showEditModal ? handleUpdateOrder : handleCreateOrder} className="p-5 space-y-5 overflow-y-auto text-xs">
+
+              {/* MODAL INLINE ERROR BANNER */}
+              {modalError && (
+                <div className="bg-rose-50 border-2 border-rose-300 rounded-sm p-4 flex items-start justify-between shadow-xs animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="flex items-start gap-3">
+                    <div className="p-1.5 bg-rose-100 rounded-full text-rose-600 shrink-0">
+                      <AlertCircle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-rose-900 text-xs">
+                        {modalError.toLowerCase().includes('shipment id') ? 'Duplicate Shipment ID Detected' :
+                         modalError.toLowerCase().includes('order id') ? 'Duplicate Order ID Detected' :
+                         'Order Submission Error'}
+                      </h4>
+                      <p className="text-rose-800 font-medium text-xs mt-1 leading-relaxed">{modalError}</p>
+                      <p className="text-[11px] text-rose-600 mt-1">Please update the field highlighted below with a unique value before continuing.</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalError(null);
+                      setModalFieldErrors({});
+                    }}
+                    className="text-rose-400 hover:text-rose-700 p-1 hover:bg-rose-100 rounded transition-colors shrink-0"
+                    title="Dismiss alert"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
 
               {/* COMPANY & ORDER DETAILS */}
               <div className="bg-[#f6f7f7] border border-[#c3c4c7] p-4 rounded-sm space-y-4">
@@ -2637,26 +3011,80 @@ export default function OrdersPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
                   <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Order ID *</label>
+                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                      <span>Order ID *</span>
+                      {(duplicateOrderNumberOrder || modalFieldErrors.order_number) && (
+                        <span className="text-[10px] text-rose-700 font-bold bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300">
+                          ⚠️ Already Exists
+                        </span>
+                      )}
+                    </label>
                     <input
                       type="text"
                       placeholder="e.g. 114-9593444-6125814"
                       value={orderForm.order_number}
-                      onChange={(e) => setOrderForm({ ...orderForm, order_number: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#1d2327] outline-none focus:border-[#2271b1]"
+                      onChange={(e) => {
+                        setOrderForm({ ...orderForm, order_number: e.target.value });
+                        if (modalFieldErrors.order_number) {
+                          setModalFieldErrors(prev => ({ ...prev, order_number: undefined }));
+                        }
+                        if (modalError && modalError.toLowerCase().includes('order id')) {
+                          setModalError(null);
+                        }
+                      }}
+                      className={`w-full bg-white border p-2 font-mono font-bold text-[#1d2327] outline-none transition-all ${
+                        duplicateOrderNumberOrder || modalFieldErrors.order_number
+                          ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
+                          : 'border-[#8c8f94] focus:border-[#2271b1]'
+                      }`}
                       required
                     />
+                    {(duplicateOrderNumberOrder || modalFieldErrors.order_number) && (
+                      <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        {duplicateOrderNumberOrder
+                          ? `Order ID '${orderForm.order_number}' already exists in the system.`
+                          : modalFieldErrors.order_number}
+                      </p>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#1d2327] mb-1">Shipment ID</label>
+                    <label className="block font-bold text-[#1d2327] mb-1 flex items-center justify-between">
+                      <span>Shipment ID</span>
+                      {(duplicateShipmentOrder || modalFieldErrors.shipment_id) && (
+                        <span className="text-[10px] text-rose-700 font-bold bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300">
+                          ⚠️ Already Exists
+                        </span>
+                      )}
+                    </label>
                     <input
                       type="text"
                       placeholder="e.g. INBTLAUG819"
                       value={orderForm.shipment_id}
-                      onChange={(e) => setOrderForm({ ...orderForm, shipment_id: e.target.value })}
-                      className="w-full bg-white border border-[#8c8f94] p-2 font-mono font-bold text-[#2271b1] outline-none focus:border-[#2271b1]"
+                      onChange={(e) => {
+                        setOrderForm({ ...orderForm, shipment_id: e.target.value });
+                        if (modalFieldErrors.shipment_id) {
+                          setModalFieldErrors(prev => ({ ...prev, shipment_id: undefined }));
+                        }
+                        if (modalError && modalError.toLowerCase().includes('shipment id')) {
+                          setModalError(null);
+                        }
+                      }}
+                      className={`w-full bg-white border p-2 font-mono font-bold outline-none transition-all ${
+                        duplicateShipmentOrder || modalFieldErrors.shipment_id
+                          ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
+                          : 'border-[#8c8f94] text-[#2271b1] focus:border-[#2271b1]'
+                      }`}
                     />
+                    {(duplicateShipmentOrder || modalFieldErrors.shipment_id) && (
+                      <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        {duplicateShipmentOrder
+                          ? `Shipment ID '${orderForm.shipment_id}' already exists (Order #${duplicateShipmentOrder.order_number}). Please use a unique Shipment ID.`
+                          : modalFieldErrors.shipment_id}
+                      </p>
+                    )}
                   </div>
 
                   {/* Searchable Seller Account Dropdown */}
@@ -2789,7 +3217,7 @@ export default function OrdersPage() {
                                     product_url: matched.product_url || prod.product_url || '',
                                     product_image: matched.image_url || prod.product_image,
                                     price_usd: matched.price || prod.price_usd || 0,
-                                    order_status: (matched.stock_quantity > 0 ? 'in stock' : prod.order_status) || 'ADBH',
+                                    order_status: (matched.stock_quantity > 0 ? 'in stock' : prod.order_status) || '',
                                   } : {})
                                 });
                               }}
@@ -2812,7 +3240,7 @@ export default function OrdersPage() {
                                       product_url: item.product_url || prod.product_url || '',
                                       product_image: item.image_url || prod.product_image,
                                       price_usd: item.price || prod.price_usd || 0,
-                                      order_status: (item.stock_quantity > 0 ? 'in stock' : prod.order_status) || 'ADBH',
+                                      order_status: (item.stock_quantity > 0 ? 'in stock' : prod.order_status) || '',
                                       showProductDropdown: false,
                                     });
                                   }}
@@ -2943,13 +3371,15 @@ export default function OrdersPage() {
                         <div>
                           <label className="block font-bold text-[#1d2327] mb-1">Order Status *</label>
                           <select
-                            value={prod.order_status || 'ADBH'}
+                            value={prod.order_status || ''}
                             onChange={(e) => handleUpdateProductItem(prod.id, { order_status: e.target.value })}
                             className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1]"
-                            required
                           >
-                            <option value="ADBH">ADBH</option>
+                            <option value="">— Select Status —</option>
                             <option value="in stock">in stock</option>
+                            <option value="OFS">OFS</option>
+                            <option value="Hold">Hold</option>
+                            <option value="ADBH">ADBH</option>
                             <option value="Canton">Canton</option>
                             <option value="Doweta">Doweta</option>
                             <option value="RBS">RBS</option>
@@ -3150,13 +3580,15 @@ export default function OrdersPage() {
                     <div>
                       <label className="block font-bold text-[#1d2327] mb-1">Order Status *</label>
                       <select
-                        value={orderForm.order_status}
+                        value={orderForm.order_status || ''}
                         onChange={(e) => setOrderForm(prev => ({ ...prev, order_status: e.target.value }))}
                         className="w-full bg-white border border-[#8c8f94] p-2 font-bold text-[#1d2327] outline-none focus:border-[#2271b1]"
-                        required
                       >
-                        <option value="ADBH">ADBH</option>
+                        <option value="">— Select Status —</option>
                         <option value="in stock">in stock</option>
+                        <option value="OFS">OFS</option>
+                        <option value="Hold">Hold</option>
+                        <option value="ADBH">ADBH</option>
                         <option value="Canton">Canton</option>
                         <option value="Doweta">Doweta</option>
                         <option value="RBS">RBS</option>
@@ -3334,6 +3766,28 @@ export default function OrdersPage() {
             <form onSubmit={handleCreatePurchase} className="flex flex-col flex-1 min-h-0 overflow-hidden">
               {/* Scrollable Form Body */}
               <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+                {/* Purchase Error Banner */}
+                {purchaseModalError && (
+                  <div className="bg-rose-50 border-2 border-rose-300 rounded-sm p-3.5 flex items-start justify-between shadow-xs animate-in fade-in slide-in-from-top-1 duration-150">
+                    <div className="flex items-start gap-2.5">
+                      <div className="p-1 bg-rose-100 rounded-full text-rose-600 shrink-0 mt-0.5">
+                        <AlertCircle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-rose-900 text-xs">Validation Required</p>
+                        <p className="text-rose-700 mt-0.5 leading-relaxed font-medium">{purchaseModalError}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPurchaseModalError(null)}
+                      className="text-rose-400 hover:text-rose-700 p-0.5 hover:bg-rose-100 rounded transition-colors shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Context Summary & Cost */}
                 <div className="px-3.5 py-2 bg-[#f6f7f7] border border-[#c3c4c7] rounded-xs flex flex-wrap items-center justify-between gap-3 text-xs">
                   <div className="flex items-center gap-4 flex-wrap text-[#50575e]">
@@ -3376,11 +3830,17 @@ export default function OrdersPage() {
                       const inStockQty = itemInv?.stock_quantity || 0;
 
                       return (
-                        <div key={item.id} className={`border rounded-xs overflow-hidden ${item.is_in_stock ? 'border-emerald-300 bg-emerald-50/20' : 'border-[#c3c4c7] bg-white'}`}>
+                        <div key={item.id} className={`border rounded-xs overflow-hidden ${
+                          item.is_ofs ? 'border-rose-300 bg-rose-50/20' : item.is_in_stock ? 'border-emerald-300 bg-emerald-50/20' : 'border-[#c3c4c7] bg-white'
+                        }`}>
                           {/* Item Header */}
-                          <div className={`px-4 py-2.5 flex items-center justify-between ${item.is_in_stock ? 'bg-emerald-100/70 border-b border-emerald-200' : 'bg-[#f0f0f1] border-b border-[#c3c4c7]'}`}>
+                          <div className={`px-4 py-2.5 flex items-center justify-between ${
+                            item.is_ofs ? 'bg-rose-100/70 border-b border-rose-200' : item.is_in_stock ? 'bg-emerald-100/70 border-b border-emerald-200' : 'bg-[#f0f0f1] border-b border-[#c3c4c7]'
+                          }`}>
                             <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${item.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-[#2271b1] text-white'}`}>
+                              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${
+                                item.is_ofs ? 'bg-rose-600 text-white' : item.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-[#2271b1] text-white'
+                              }`}>
                                 {idx + 1}
                               </span>
                               {item.product_image && (
@@ -3402,25 +3862,58 @@ export default function OrdersPage() {
                               </div>
                             </div>
 
-                            {/* In Stock / Purchase Toggle */}
-                            <button
-                              type="button"
-                              onClick={() => updatePurchaseItem(item.id, {
-                                is_in_stock: !item.is_in_stock,
-                                purchase_partner_name: !item.is_in_stock ? 'In-Stock Inventory' : (selectedOrderForPurchase?.seller_account || selectedOrderForPurchase?.account_name || 'Aryastore Partner'),
-                                notes: !item.is_in_stock ? 'In-Stock Order' : '',
-                              })}
-                              className={`flex items-center gap-1.5 px-3 py-1 rounded-xs text-[11px] font-bold transition-all shrink-0 cursor-pointer ${item.is_in_stock
-                                ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs'
-                                : 'bg-[#2271b1] text-white hover:bg-[#135e96] shadow-xs'
+                            {/* In Stock / Purchase / OFS Action Buttons */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: false,
+                                  is_ofs: false,
+                                  purchase_partner_name: selectedOrderForPurchase?.seller_account || selectedOrderForPurchase?.account_name || 'Aryastore Partner',
+                                  notes: '',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  !item.is_in_stock && !item.is_ofs
+                                    ? 'bg-[#2271b1] text-white shadow-xs'
+                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
                                 }`}
-                            >
-                              {item.is_in_stock ? (
-                                <><ToggleRight className="w-3.5 h-3.5" /><span>In Stock ✓</span></>
-                              ) : (
-                                <><ToggleLeft className="w-3.5 h-3.5" /><span>Company Purchase</span></>
-                              )}
-                            </button>
+                              >
+                                Purchase
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: true,
+                                  is_ofs: false,
+                                  purchase_partner_name: 'In-Stock Inventory',
+                                  notes: 'In-Stock Order',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  item.is_in_stock && !item.is_ofs
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
+                                }`}
+                              >
+                                In Stock ✓
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePurchaseItem(item.id, {
+                                  is_in_stock: false,
+                                  is_ofs: true,
+                                  purchase_partner_name: 'OFS',
+                                  purchase_value: 0,
+                                  notes: 'Out of Stock (OFS)',
+                                })}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
+                                  item.is_ofs
+                                    ? 'bg-rose-600 text-white shadow-xs'
+                                    : 'bg-white text-rose-700 hover:bg-rose-50 border border-rose-300'
+                                }`}
+                              >
+                                ⚠ OFS
+                              </button>
+                            </div>
                           </div>
 
                           {/* Item Form Fields */}
@@ -3446,7 +3939,7 @@ export default function OrdersPage() {
                               <div>
                                 <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">
                                   <DollarSign className="w-3 h-3 text-emerald-600" />
-                                  <span>{item.is_in_stock ? 'Stock Cost (INR ₹)' : 'Purchase Cost (INR ₹)'}</span>
+                                  <span>{item.is_ofs ? 'Cost (INR ₹)' : item.is_in_stock ? 'Stock Cost (INR ₹)' : 'Purchase Cost (INR ₹)'}</span>
                                 </label>
                                 <input
                                   type="number"
@@ -3465,10 +3958,11 @@ export default function OrdersPage() {
                                   <span>Company / Channel</span>
                                 </label>
                                 <select
-                                  value={item.company || 'ADBH'}
+                                  value={item.company || ''}
                                   onChange={(e) => updatePurchaseItem(item.id, { company: e.target.value })}
                                   className="w-full bg-white border border-[#8c8f94] p-1.5 font-bold text-[#1d2327] outline-none focus:border-[#2271b1] rounded-xs text-xs cursor-pointer"
                                 >
+                                  <option value="">— Select Company —</option>
                                   {ORDER_STATUS_OPTIONS.map((st) => (
                                     <option key={st} value={st}>{st}</option>
                                   ))}
@@ -3480,7 +3974,7 @@ export default function OrdersPage() {
                             </div>
 
                             {/* Additional fields for purchase mode */}
-                            {!item.is_in_stock && (
+                            {!item.is_in_stock && !item.is_ofs && (
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 border-t border-slate-100">
                                 <div>
                                   <label className="block font-bold text-[#1d2327] mb-0.5 text-[10px] flex items-center gap-1">

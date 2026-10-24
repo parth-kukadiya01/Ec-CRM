@@ -425,7 +425,7 @@ export default function DashboardOverview() {
                     return (
                       <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-medium">{ord.order_process_date || ord.order_date || '—'}</td>
-                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || 'ADBH'}</td>
+                        <td className="py-2 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || '—'}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>
                         <td className="py-2 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
                           <div className="flex items-center gap-2 max-w-full overflow-hidden">
@@ -461,11 +461,12 @@ export default function DashboardOverview() {
                         <td className="py-2 px-3">
                           <span className={`px-2 py-0.5 font-bold text-[10px] uppercase rounded-xs border ${ord.status === 'Delivered' ? 'bg-purple-100 text-purple-900 border-purple-300'
                             : ord.status === 'Shipped' ? 'bg-blue-100 text-blue-900 border-blue-300'
+                              : ord.status === 'OFS' ? 'bg-rose-100 text-rose-900 border-rose-300 font-extrabold'
                               : ord.status === 'Purchased' ? 'bg-amber-100 text-amber-900 border-amber-300'
                                 : ord.status === 'Ready to Ship' ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
                                   : 'bg-[#f0f0f1] text-[#1d2327] border-[#c3c4c7]'
                             }`}>
-                            {ord.status || 'ADBH'}
+                            {ord.status || 'Pending'}
                           </span>
                         </td>
                       </tr>

@@ -135,6 +135,7 @@ export const ordersApi = {
   createBulk: (data: any[]) => api.post('/orders/bulk', data),
   update: (id: number, data: any) => api.put(`/orders/${id}`, data),
   updateStatus: (id: number, status: string) => api.put(`/orders/${id}`, { status, order_status: status }),
+  toggleHold: (id: number, reason?: string) => api.post(`/orders/${id}/toggle-hold`, { reason }),
   uploadCsv: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);

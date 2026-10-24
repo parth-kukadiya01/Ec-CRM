@@ -49,10 +49,10 @@ export function hasPermission(currentUser: any, requiredPermission: string): boo
   if (moduleName === 'purchases' && ['Purchase Manager'].includes(roleName)) {
     return true;
   }
-  if (moduleName === 'shipments' && ['Shipment Manager'].includes(roleName)) {
+  if (moduleName === 'shipments' && ['Shipment Manager', 'Shipment Specialist', 'Orders & Shipments Specialist'].includes(roleName)) {
     return true;
   }
-  if (moduleName === 'orders' && ['Sales Executive', 'Channel Partner'].includes(roleName)) {
+  if (moduleName === 'orders' && ['Sales Executive', 'Channel Partner', 'Orders & Shipments Specialist', 'Orders & Purchases Specialist'].includes(roleName)) {
     return true;
   }
 
@@ -61,24 +61,21 @@ export function hasPermission(currentUser: any, requiredPermission: string): boo
 
 /**
  * Returns allowed companies for a user.
- * User 2 (ops2@crm.com or users with allowed_companies set) only have access to ADBH and Globle.
- * Super Admin and User 1 (ops1@crm.com) have access to all companies.
+ * Users with allowed_companies set in DB are restricted to those companies.
+ * Users without allowed_companies have access to all companies.
  */
 export function getAllowedCompanies(currentUser: any): string[] {
-  const ALL_COMPANIES = ['ADBH', 'Vetai', 'Globle', 'canton'];
-  if (!currentUser) return ALL_COMPANIES;
-  if (currentUser.is_admin || currentUser.role_name === 'Super Admin') return ALL_COMPANIES;
+  const ALL_COMPANIES = ['ADBH', 'Vetai', 'Globle', 'Canton', 'canton'];
+  if (!currentUser) return ['ADBH', 'Vetai', 'Globle', 'Canton'];
+  if (currentUser.is_admin || currentUser.role_name === 'Super Admin') return ['ADBH', 'Vetai', 'Globle', 'Canton'];
 
-  if (currentUser.email === 'ops2@crm.com' || currentUser.allowed_companies) {
-    if (currentUser.allowed_companies) {
-      const raw = currentUser.allowed_companies.split(',').map((c: string) => c.trim().toLowerCase());
-      const filtered = ALL_COMPANIES.filter(c => raw.some((r: string) => c.toLowerCase().includes(r) || r.includes(c.toLowerCase()) || (r === 'global' && c.toLowerCase() === 'globle')));
-      return filtered.length > 0 ? filtered : ['ADBH', 'Globle'];
-    }
-    return ['ADBH', 'Globle'];
+  if (currentUser.allowed_companies) {
+    const raw = currentUser.allowed_companies.split(',').map((c: string) => c.trim().toLowerCase());
+    const filtered = ALL_COMPANIES.filter(c => raw.some((r: string) => c.toLowerCase().includes(r) || r.includes(c.toLowerCase()) || (r === 'global' && c.toLowerCase() === 'globle')));
+    return filtered.length > 0 ? Array.from(new Set(filtered)) : currentUser.allowed_companies.split(',').map((c: string) => c.trim());
   }
 
-  return ALL_COMPANIES;
+  return ['ADBH', 'Vetai', 'Globle', 'Canton'];
 }
 
 /**

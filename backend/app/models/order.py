@@ -13,8 +13,8 @@ class Order(Base):
     last_delivery_date = Column(Date, nullable=True)
     shipping_date = Column(Date, nullable=True)
 
-    company = Column(String(100), nullable=True, default="ADBH")
-    shipment_id = Column(String(100), nullable=True)
+    company = Column(String(100), nullable=True)
+    shipment_id = Column(String(100), nullable=True, unique=True, index=True)
     seller_account = Column(String(150), nullable=True)
 
     product_id = Column(Integer, ForeignKey("inventory.id", ondelete="SET NULL"), nullable=True)
@@ -24,7 +24,7 @@ class Order(Base):
     product_items = Column(Text, nullable=True)
     qty = Column(Integer, nullable=False, default=1)
     product_price = Column(Float, nullable=True, default=0.0)
-    order_status = Column(String(100), nullable=True, default="ADBH")
+    order_status = Column(String(100), nullable=True)
     purchase_cost_inr = Column(Float, nullable=True, default=0.0)
     admin_cost_share = Column(Float, nullable=True, default=0.0)
     arriving_date = Column(String(100), nullable=True)
@@ -48,6 +48,11 @@ class Order(Base):
     delivery_service = Column(String(100), nullable=True)
     shipment_cost = Column(Float, nullable=True, default=0.0)
     status = Column(String(50), nullable=True, default="Pending")
+
+    # Hold fields
+    is_hold = Column(Boolean, nullable=True, default=False)
+    hold_reason = Column(Text, nullable=True)
+    hold_at = Column(DateTime, nullable=True)
 
     # Label fields
     label_pdf_url = Column(Text, nullable=True)

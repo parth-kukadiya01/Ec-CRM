@@ -5,4 +5,5 @@
 4	Orders & Purchases Only	Orders & Purchases Executive	orders.purchases@crm.com	user123	Orders & Purchases
 5	Shipments Only	Shipment Executive	shipments@crm.com	user123	Shipments
 6	Orders, Purchases & Shipments (User 1)	Fulfillment Executive 1	ops1@crm.com	user123	Orders, Purchases & Shipments (All Companies)
-7	Orders, Purchases & Shipments (User 2)	Fulfillment Executive 2	ops2@crm.com	user123	Orders, Purchases & Shipments (ADBH & Globle Only)
+7	Orders, Purchases & Shipments (User 2)	Fulfillment Executive 2	ops2@crm.com	user123	Orders, Purchases & Shipments (All Companies)
+8	Orders & Shipments Only (Canton)	Canton Executive	canton@crm.com	user123	Orders & Shipments (Canton Only)
