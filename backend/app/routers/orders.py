@@ -142,14 +142,32 @@ def get_next_shipment_id(db: Session, offset: int = 0) -> str:
 def split_multi_products(raw_name: str) -> List[str]:
     if not raw_name:
         return []
-    parts = re.split(r'\||\r?\n|;(?!\s*\d)', str(raw_name))
-    cleaned = []
-    for p in parts:
-        item = p.strip()
-        item = re.sub(r'^(?:\d+[\.\)]\s*|[\-•\*\+]\s*)', '', item).strip()
-        if item:
-            cleaned.append(item)
-    return cleaned if cleaned else [str(raw_name).strip()]
+    raw_str = str(raw_name).strip()
+    if not raw_str:
+        return []
+
+    # If the user explicitly used '@' or '?' to separate multiple products within a single cell
+    parts = []
+    if '@' in raw_str:
+        parts = raw_str.split('@')
+        
+    elif '?' in raw_str:
+        parts = raw_str.split('?')
+
+    if parts:
+        cleaned = []
+        for p in parts:
+            item = re.sub(r'\s+', ' ', p).strip()
+            item = re.sub(r'^(?:\d+[\.\)]\s*|[\-•\*\+]\s*)', '', item).strip()
+            if item:
+                cleaned.append(item)
+        if len(cleaned) > 1:
+            return cleaned
+
+    # Otherwise, treat as a single product. Collapse any inner newlines, tabs, and excess whitespace into single spaces
+    single_clean = re.sub(r'\s+', ' ', raw_str).strip()
+    single_clean = re.sub(r'^(?:\d+[\.\)]\s*|[\-•\*\+]\s*)', '', single_clean).strip()
+    return [single_clean] if single_clean else [raw_str]
 
 def is_direct_image_url(url: Optional[str]) -> bool:
     if not url:
@@ -933,8 +951,9 @@ KEY_MAPPINGS = {
     "shipping_date": ["shippingdate", "shipdate", "dateshipped", "dispatcheddate", "shipmentdate"],
     "last_delivery_date": ["lastdeliverydate", "deliverydate", "deliverby", "latestdeliverydate", "expecteddeliverydate", "maxdeliverydate"],
     "arriving_date": ["arrivingdate", "arrivaldate", "estimatedarrival", "expectedarrivaldate"],
-    "company": ["company", "companyname", "sourcingagent", "client", "person"],
+    "company": ["company", "companyname", "companyperson", "companyorperson", "companyandperson", "person", "personname", "sourcingagent", "client", "buyercompany", "clientcompany"],
     "shipment_id": ["shipmentid", "shipmentnumber", "shipmentno", "awb", "trackingid", "shipmentcode"],
+    "forwarding_id": ["forwardingid", "forwardingnumber", "forwarding", "forwardingno", "forwardingcode", "forwardingtrackingid"],
     "seller_account": ["selleraccount", "seller", "store", "account", "sellername", "merchant", "storeaccount"],
     "product_name": ["productname", "product", "title", "itemname", "item", "description", "producttitle"],
     "product_url": ["producturl", "url", "link", "itemurl", "asinurl", "productlink"],
@@ -1017,11 +1036,11 @@ SAMPLE_DATA_ROWS = [
         "Vetai",
         "INBTL002",
         "Store US #2",
-        "Organic Vitamin C Serum 30ml | Hydrating Hyaluronic Cream 50g",
-        "https://example.com/product/serum | https://example.com/product/cream",
+        "Organic Vitamin C Serum 30ml @ Hydrating Hyaluronic Cream 50g",
+        "https://example.com/product/serum @ https://example.com/product/cream",
         "",
-        "2 | 1",
-        "19.99 | 24.50",
+        "2 @ 1",
+        "19.99 @ 24.50",
         "ADBH",
         "Alice Smith",
         "456 Oak Avenue",
@@ -1159,7 +1178,7 @@ def download_sample_template(
 
         rules = [
             ("Order ID (Required)", "Unique Order ID (e.g. 114-1029384-5928173). Required on every row."),
-            ("Multi-Product Orders", "To create a multi-item order, put multiple rows with the SAME Order ID. They will be combined into a single order with individual product items."),
+            ("Multi-Product Orders", "To create a multi-item order, separate items on one row with '@' (e.g. Item 1 @ Item 2, Qty: 2 @ 1, Price: 19.99 @ 24.50), OR put multiple rows with the SAME Order ID."),
             ("Product Name (Required)", "Name/title of the product. Cannot be empty."),
             ("Qty (Required)", "Integer quantity >= 1 (e.g. 1, 2, 5)."),
             ("Price ($) (Required)", "Sale price in USD (e.g. 29.99, 15.00). Must be non-negative."),
@@ -1406,15 +1425,19 @@ async def upload_bulk_orders_file(
 
         order_numbers_in_file.add(raw_order_num)
 
-        # Check if single row has multiple products (e.g. "Product A | Product B" or separated by newlines/semicolons)
+        # Check if single row has multiple products explicitly separated by '@' or '?'
         if len(product_parts) > 1:
             raw_qty_str = get_val("qty", "1")
-            qty_parts = [q.strip() for q in re.split(r'\||\r?\n|;', raw_qty_str) if q.strip()]
+            qty_parts = [q.strip() for q in re.split(r'[@?]', raw_qty_str) if q.strip()]
             raw_price_str = get_val("price_usd", "0")
-            price_parts = [p.strip() for p in re.split(r'\||\r?\n|;', raw_price_str) if p.strip()]
+            price_parts = [p.strip() for p in re.split(r'[@?]', raw_price_str) if p.strip()]
             raw_url_val = get_val("product_url")
-            url_parts = [u.strip() for u in re.split(r'\||\r?\n|;', raw_url_val) if u.strip()]
-            img_parts = [img.strip() for img in re.split(r'\||\r?\n|;', get_val("product_image")) if img.strip()]
+            extracted_urls = re.findall(r'https?://[^\s@?]+', raw_url_val)
+            if len(extracted_urls) >= len(product_parts):
+                url_parts = extracted_urls
+            else:
+                url_parts = [u.strip() for u in re.split(r'[@?]', raw_url_val) if u.strip()]
+            img_parts = [img.strip() for img in re.split(r'[@?]', get_val("product_image")) if img.strip()]
 
             for p_idx, p_name in enumerate(product_parts):
                 # Qty for sub-product
@@ -1477,7 +1500,8 @@ async def upload_bulk_orders_file(
                     "mobile_number": get_val("mobile_number"),
                     "country": get_val("country", "USA"),
                     "purchase_cost_inr": purchase_cost_val if p_idx == 0 else 0.0,
-                    "shipment_cost": shipment_cost_val if p_idx == 0 else 0.0
+                    "shipment_cost": shipment_cost_val if p_idx == 0 else 0.0,
+                    "forwarding_id": get_val("forwarding_id")
                 }
 
                 if raw_order_num not in grouped_orders:
@@ -1513,6 +1537,7 @@ async def upload_bulk_orders_file(
                 "arriving_date": raw_arriving_date,
                 "company": company,
                 "shipment_id": get_val("shipment_id"),
+                "forwarding_id": get_val("forwarding_id"),
                 "seller_account": get_val("seller_account", acc_name or ""),
                 "product_name": product_parts[0],
                 "product_url": row_resolved_url,
@@ -1576,7 +1601,7 @@ async def upload_bulk_orders_file(
             total_items_count += len(items)
 
             # Combined product name
-            combined_product_name = " | ".join(it["product_name"] for it in items)
+            combined_product_name = " @ ".join(it["product_name"] for it in items)
 
             # Build product_items array
             product_items_list = []
@@ -1653,6 +1678,7 @@ async def upload_bulk_orders_file(
                 country=first_item["country"] or "USA",
                 account_id=acc_id,
                 account_name=acc_name,
+                label_tracking_id=first_item.get("forwarding_id") or None,
                 status="Pending"
             )
             db.add(new_order)

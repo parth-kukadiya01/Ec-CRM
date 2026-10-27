@@ -166,7 +166,8 @@ export default function ResizableTable({
 
       const key = getColKey(th, idx);
       if (hasSavedCols && savedCols[key]) {
-        const w = savedCols[key];
+        // Enforce minimum 60px width so columns can never be crushed into overlapping text
+        const w = Math.max(60, savedCols[key]);
         th.style.width = `${w}px`;
         th.style.minWidth = `${w}px`;
         th.style.maxWidth = `${w}px`;
@@ -179,7 +180,7 @@ export default function ResizableTable({
       let totalW = 0;
       ths.forEach((th, idx) => {
         const key = getColKey(th, idx);
-        const w = savedCols[key] || Math.round(th.getBoundingClientRect().width) || 100;
+        const w = savedCols[key] ? Math.max(60, savedCols[key]) : (Math.round(th.getBoundingClientRect().width) || 100);
         totalW += w;
       });
       table.style.width = `${totalW}px`;
@@ -386,8 +387,8 @@ export default function ResizableTable({
 
         const onMouseMove = (ev: MouseEvent) => {
           const diff = ev.clientX - startX;
-          // Decreasing down to 30px or expanding freely
-          const newColWidth = Math.max(30, Math.round(startWidth + diff));
+          // Decreasing down to 60px or expanding freely
+          const newColWidth = Math.max(60, Math.round(startWidth + diff));
 
           th.style.width = `${newColWidth}px`;
           th.style.minWidth = `${newColWidth}px`;

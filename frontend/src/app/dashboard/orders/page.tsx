@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { ordersApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
+import { ordersApi, shipmentsApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
 import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
 import BulkUploadOrdersModal from '@/components/BulkUploadOrdersModal';
@@ -80,6 +80,7 @@ const ORDER_TABLE_COLUMNS: ColumnDefinition[] = [
   { key: 'arriving_date', label: 'Arriving Date' },
   { key: 'company', label: 'Company / Person' },
   { key: 'shipment_id', label: 'Shipment ID' },
+  { key: 'forwarding_id', label: 'Forwarding ID' },
   { key: 'order_number', label: 'Order ID' },
   { key: 'seller_account', label: 'Seller Account' },
   { key: 'product_name', label: 'Product Name' },
@@ -108,6 +109,7 @@ const ORDER_COLUMN_PRESETS: ColumnPreset[] = [
       'order_process_date',
       'last_delivery_date',
       'company',
+      'forwarding_id',
       'order_number',
       'seller_account',
       'product_name',
@@ -129,6 +131,7 @@ const ORDER_COLUMN_PRESETS: ColumnPreset[] = [
       'last_delivery_date',
       'arriving_date',
       'shipment_id',
+      'forwarding_id',
       'order_number',
       'product_name',
       'consignee_name',
@@ -167,6 +170,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [purchasesList, setPurchasesList] = useState<any[]>([]);
+  const [shipmentsList, setShipmentsList] = useState<any[]>([]);
   const [dbAccounts, setDbAccounts] = useState<any[]>([]);
   const [companiesList, setCompaniesList] = useState<any[]>([]);
   const [partnersList, setPartnersList] = useState<any[]>([]);
@@ -179,7 +183,13 @@ export default function OrdersPage() {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('crm_orders_column_visibility');
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.forwarding_id === undefined) {
+            parsed.forwarding_id = true;
+          }
+          return parsed;
+        }
       } catch (e) { }
     }
     const initial: Record<string, boolean> = {};
@@ -598,19 +608,23 @@ export default function OrdersPage() {
       if (showLoading) {
         setLoading(true);
       }
-      const ordRes = await ordersApi.list().catch(() => ({ data: [] }));
-      const meRes = await authApi.getMe().catch(() => ({ data: null }));
-      const accRes = await accountsApi.list().catch(() => ({ data: [] }));
-      const compRes = await companiesApi.list().catch(() => ({ data: [] }));
-      const partRes = await partnersMgmtApi.list().catch(() => ({ data: [] }));
-      const invRes = await inventoryApi.list().catch(() => ({ data: [] }));
-      const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
+      const [ordRes, meRes, accRes, compRes, partRes, invRes, purRes, shipRes] = await Promise.all([
+        ordersApi.list().catch(() => ({ data: [] })),
+        authApi.getMe().catch(() => ({ data: null })),
+        accountsApi.list().catch(() => ({ data: [] })),
+        companiesApi.list().catch(() => ({ data: [] })),
+        partnersMgmtApi.list().catch(() => ({ data: [] })),
+        inventoryApi.list().catch(() => ({ data: [] })),
+        purchasesApi.list().catch(() => ({ data: [] })),
+        shipmentsApi.list().catch(() => ({ data: [] })),
+      ]);
       setOrders(ordRes.data || []);
       setDbAccounts(accRes.data || []);
       setCompaniesList(compRes.data || []);
       setPartnersList(partRes.data || []);
       setInventoryList(invRes.data || []);
       setPurchasesList(purRes.data || []);
+      setShipmentsList(shipRes.data || []);
       const user = meRes?.data || null;
       setCurrentUser(user);
 
@@ -2327,6 +2341,7 @@ export default function OrdersPage() {
                     {visibleColumns.arriving_date !== false && <th data-col="arriving_date" className="py-2.5 px-3 border-r border-[#c3c4c7]">Arriving Date</th>}
                     {visibleColumns.company !== false && <th data-col="company" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Company / Person</th>}
                     {visibleColumns.shipment_id !== false && <th data-col="shipment_id" className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment ID</th>}
+                    {visibleColumns.forwarding_id !== false && <th data-col="forwarding_id" className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap min-w-[120px]">Forwarding ID</th>}
                     {visibleColumns.order_number !== false && <th data-col="order_number" className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
                     {visibleColumns.seller_account !== false && <th data-col="seller_account" className="py-2.5 px-3 border-r border-[#c3c4c7]">Seller Account</th>}
                     {visibleColumns.product_name !== false && <th data-col="product_name" className="py-2.5 px-3 border-r border-[#c3c4c7]">Product Name</th>}
@@ -2385,6 +2400,21 @@ export default function OrdersPage() {
                           </td>
                         )}
                         {visibleColumns.shipment_id !== false && <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-[#2271b1] font-semibold">{ord.shipment_id || '—'}</td>}
+                        {visibleColumns.forwarding_id !== false && (
+                          <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono text-xs font-bold text-[#1d2327] whitespace-nowrap">
+                            {(() => {
+                              const matchingShip = shipmentsList.find((s: any) => s.order_id === ord.id);
+                              const fwd = ord.label_tracking_id || matchingShip?.forwarding_number;
+                              return fwd ? (
+                                <span className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded-xs text-[11px] font-bold text-slate-800 inline-block">
+                                  {fwd}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-normal">—</span>
+                              );
+                            })()}
+                          </td>
+                        )}
                         {visibleColumns.order_number !== false && (
                           <td className="py-2 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#1d2327]">
                             <div className="flex items-center gap-1.5">

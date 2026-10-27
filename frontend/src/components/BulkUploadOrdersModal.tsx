@@ -318,7 +318,7 @@ export default function BulkUploadOrdersModal({
                   <span className="font-bold text-[#1d2327] shrink-0">1. Multi-Product Orders (2 Easy Ways):</span>
                   <div className="space-y-1">
                     <p>
-                      <strong>Way A (Single Row with pipe <code>|</code>):</strong> Put items in one row separated by <code>|</code>. E.g., Product Name: <code>Item 1 | Item 2</code>, Qty: <code>2 | 1</code>, Price: <code>19.99 | 24.50</code>.
+                      <strong>Way A (Single Row with @ or ? sign):</strong> Put items in one row separated by <code>@</code> or <code>?</code>. E.g., Product Name: <code>Item 1 ? Item 2</code> (or with <code>@</code>), Qty: <code>2 ? 1</code>, Price: <code>19.99 ? 24.50</code>.
                     </p>
                     <p>
                       <strong>Way B (Multiple Rows):</strong> Put multiple rows with the <strong>exact same Order ID</strong>. They will automatically be bundled into one order.

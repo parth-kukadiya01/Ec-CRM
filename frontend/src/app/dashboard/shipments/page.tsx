@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { shipmentsApi, ordersApi, authApi, purchasesApi, companiesApi, accountsApi, partnersMgmtApi, inventoryApi, getImageUrl } from '@/lib/api';
-import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2, Download, Filter, Tag, Settings2 } from 'lucide-react';
+import { Truck, CheckCircle2, Clock, MapPin, PackageCheck, Edit2, Trash2, ShieldAlert, Plus, Layers, Calendar, RotateCcw, ChevronLeft, ChevronRight, Search, X, Scale, Box, DollarSign, FileText, Barcode, Calculator, Check, ExternalLink, Phone, Building2, Download, Filter, Tag, Settings2, PauseCircle } from 'lucide-react';
 import ResizableTable from '@/components/ResizableTable';
 import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
@@ -377,6 +377,32 @@ export default function ShipmentsPage() {
   };
 
   useEffect(() => {
+    // Clear legacy corrupted or crushed column widths from localStorage
+    try {
+      if (typeof window !== 'undefined') {
+        const keys = [
+          'table_sz__dashboard_shipments',
+          'table_sz__dashboard_shipments_cols',
+          'table_sz_shipments_ready_cols',
+          'table_sz_shipments_dispatched_cols'
+        ];
+        keys.forEach(k => {
+          const val = localStorage.getItem(k);
+          if (val) {
+            try {
+              const parsed = JSON.parse(val);
+              const isCrushed = Object.values(parsed).some((w: any) => typeof w === 'number' && w < 50);
+              if (isCrushed || k === 'table_sz__dashboard_shipments') {
+                localStorage.removeItem(k);
+              }
+            } catch (e) {
+              localStorage.removeItem(k);
+            }
+          }
+        });
+      }
+    } catch (e) { }
+
     loadAllData(true);
   }, []);
 
@@ -577,10 +603,12 @@ export default function ShipmentsPage() {
         o.status === 'In Stock' ||
         Boolean(pur && (pur.notes?.includes('In-Stock') || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock'));
 
+      const isHold = Boolean(o.is_hold || (o.order_status || '').toLowerCase() === 'hold' || o.status === 'Hold');
       const isPurchaseReceived = Boolean(pur && (pur.status === 'Received' || pur.status === 'Completed'));
       const isPurchasePending = !isInStock && !isPurchaseReceived && (o.status === 'Purchase Pending' || o.status === 'Pending' || (pur && pur.status !== 'Received'));
       const isReadyToShip = isPurchaseReceived && !isInStock;
 
+      if (selectedReadyStatus === 'Hold') return isHold;
       if (selectedReadyStatus === 'In Stock') return isInStock;
       if (selectedReadyStatus === 'Purchase Pending') return isPurchasePending;
       if (selectedReadyStatus === 'Ready to Ship') return isReadyToShip || (!isInStock && !isPurchasePending);
@@ -1377,6 +1405,23 @@ export default function ShipmentsPage() {
                     }).length}
                   </span>
                 </button>
+
+                <button
+                  onClick={() => setSelectedReadyStatus(selectedReadyStatus === 'Hold' ? 'All' : 'Hold')}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedReadyStatus === 'Hold'
+                    ? 'bg-amber-600 text-white border-amber-700 shadow-xs ring-1 ring-amber-400'
+                    : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
+                >
+                  <PauseCircle className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Hold</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${selectedReadyStatus === 'Hold' ? 'bg-white text-amber-700' : 'bg-amber-100 text-amber-800'}`}>
+                    {readyOrders.filter(o => {
+                      if (!isAllowedCompany(o.company)) return false;
+                      return Boolean(o.is_hold || (o.order_status || '').toLowerCase() === 'hold' || o.status === 'Hold');
+                    }).length}
+                  </span>
+                </button>
               </>
             ) : (
               <>
@@ -1725,8 +1770,25 @@ export default function ShipmentsPage() {
           </button>
         </div>
 
-        {/* Column Visibility Manager */}
-        <div>
+        {/* Column Visibility Manager & Reset Widths */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                localStorage.removeItem(activeTab === 'ready' ? 'table_sz_shipments_ready_cols' : 'table_sz_shipments_dispatched_cols');
+                localStorage.removeItem('table_sz__dashboard_shipments');
+                localStorage.removeItem('table_sz__dashboard_shipments_cols');
+                window.location.reload();
+              } catch (e) { }
+            }}
+            title="Reset column widths to default"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#50575e] bg-[#f6f7f7] border border-[#c3c4c7] rounded-xs hover:bg-[#f0f0f1] hover:text-[#1d2327] transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-[#50575e]" />
+            <span>Reset Widths</span>
+          </button>
+
           {activeTab === 'ready' ? (
             <ColumnVisibilityDropdown
               columns={READY_TABLE_COLUMNS}
@@ -1763,30 +1825,30 @@ export default function ShipmentsPage() {
           ) : (
             <>
               <div className="table-container overflow-x-auto">
-                <ResizableTable className="w-full text-left text-xs border-collapse">
+                <ResizableTable storageKey="shipments_ready_cols" className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                      {visibleColumnsReady['order_process_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Process Date</th>}
-                      {visibleColumnsReady['shipping_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
-                      {visibleColumnsReady['last_delivery_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
-                      {visibleColumnsReady['arriving_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>}
-                      {visibleColumnsReady['order_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
-                      {visibleColumnsReady['po_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>}
-                      {visibleColumnsReady['shipment_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>}
-                      {visibleColumnsReady['company'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Company</th>}
-                      {visibleColumnsReady['seller_account'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Partner / Seller</th>}
-                      {visibleColumnsReady['product_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>}
-                      {visibleColumnsReady['qty'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
-                      {visibleColumnsReady['consignee_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
-                      {visibleColumnsReady['shipment_address_1'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
-                      {visibleColumnsReady['shipment_address_2'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
-                      {visibleColumnsReady['city'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
-                      {visibleColumnsReady['state'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
-                      {visibleColumnsReady['zip_code'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
-                      {visibleColumnsReady['mobile_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
-                      {visibleColumnsReady['country'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
-                      {visibleColumnsReady['status'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Status</th>}
-                      {visibleColumnsReady['actions'] !== false && <th className="py-2.5 px-3 text-right">Actions</th>}
+                      {visibleColumnsReady['order_process_date'] !== false && <th data-col="order_process_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Process Date</th>}
+                      {visibleColumnsReady['shipping_date'] !== false && <th data-col="shipping_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Shipping Date</th>}
+                      {visibleColumnsReady['last_delivery_date'] !== false && <th data-col="last_delivery_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[110px]">Last Delivery Date</th>}
+                      {visibleColumnsReady['arriving_date'] !== false && <th data-col="arriving_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Arrive Date</th>}
+                      {visibleColumnsReady['order_number'] !== false && <th data-col="order_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[135px]">Order ID</th>}
+                      {visibleColumnsReady['po_number'] !== false && <th data-col="po_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[85px]">PO</th>}
+                      {visibleColumnsReady['shipment_id'] !== false && <th data-col="shipment_id" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Shipment No</th>}
+                      {visibleColumnsReady['company'] !== false && <th data-col="company" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[95px]">Company</th>}
+                      {visibleColumnsReady['seller_account'] !== false && <th data-col="seller_account" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[115px]">Partner / Seller</th>}
+                      {visibleColumnsReady['product_name'] !== false && <th data-col="product_name" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[220px]">Product Name</th>}
+                      {visibleColumnsReady['qty'] !== false && <th data-col="qty" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[55px]">Qty</th>}
+                      {visibleColumnsReady['consignee_name'] !== false && <th data-col="consignee_name" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[125px]">Consignee Name</th>}
+                      {visibleColumnsReady['shipment_address_1'] !== false && <th data-col="shipment_address_1" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
+                      {visibleColumnsReady['shipment_address_2'] !== false && <th data-col="shipment_address_2" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
+                      {visibleColumnsReady['city'] !== false && <th data-col="city" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[95px]">City</th>}
+                      {visibleColumnsReady['state'] !== false && <th data-col="state" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[75px]">State</th>}
+                      {visibleColumnsReady['zip_code'] !== false && <th data-col="zip_code" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[80px]">Zip Code</th>}
+                      {visibleColumnsReady['mobile_number'] !== false && <th data-col="mobile_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[115px]">Contact Number</th>}
+                      {visibleColumnsReady['country'] !== false && <th data-col="country" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[75px]">Country</th>}
+                      {visibleColumnsReady['status'] !== false && <th data-col="status" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[110px]">Status</th>}
+                      {visibleColumnsReady['actions'] !== false && <th data-col="actions" className="py-2.5 px-3 text-right min-w-[145px]">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#dcdcde]">
@@ -1806,19 +1868,21 @@ export default function ShipmentsPage() {
                         !isPurchaseReceived &&
                         (ord.status === 'Purchase Pending' || ord.status === 'Pending' || (pur && pur.status !== 'Received'));
 
+                      const isHoldOrder = Boolean(ord.is_hold || (ord.order_status || '').toLowerCase() === 'hold' || ord.status === 'Hold');
+
                       return (
-                        <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
-                          {visibleColumnsReady['order_process_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e]">{ord.order_process_date || ord.order_date || '—'}</td>}
-                          {visibleColumnsReady['shipping_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.shipping_date || '—'}</td>}
-                          {visibleColumnsReady['last_delivery_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.last_delivery_date || '—'}</td>}
-                          {visibleColumnsReady['arriving_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.arriving_date || pur?.estimated_shipment_date || '—'}</td>}
-                          {visibleColumnsReady['order_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">{ord.order_number}</td>}
-                          {visibleColumnsReady['po_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">{pur?.po_number || '—'}</td>}
-                          {visibleColumnsReady['shipment_id'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">{ord.shipment_id || ord.oi || '—'}</td>}
-                          {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.company || '—'}</td>}
-                          {visibleColumnsReady['seller_account'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1]">{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>}
+                        <tr key={ord.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} ${isHoldOrder ? 'border-l-4 border-l-amber-500 bg-amber-50/40' : ''} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
+                          {visibleColumnsReady['order_process_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#50575e] overflow-hidden text-ellipsis">{ord.order_process_date || ord.order_date || '—'}</td>}
+                          {visibleColumnsReady['shipping_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">{ord.shipping_date || '—'}</td>}
+                          {visibleColumnsReady['last_delivery_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">{ord.last_delivery_date || '—'}</td>}
+                          {visibleColumnsReady['arriving_date'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">{ord.arriving_date || pur?.estimated_shipment_date || '—'}</td>}
+                          {visibleColumnsReady['order_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1] overflow-hidden text-ellipsis">{ord.order_number}</td>}
+                          {visibleColumnsReady['po_number'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327] overflow-hidden text-ellipsis">{pur?.po_number || '—'}</td>}
+                          {visibleColumnsReady['shipment_id'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1] overflow-hidden text-ellipsis">{ord.shipment_id || ord.oi || '—'}</td>}
+                          {visibleColumnsReady['company'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327] overflow-hidden text-ellipsis">{ord.company || '—'}</td>}
+                          {visibleColumnsReady['seller_account'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#2271b1] overflow-hidden text-ellipsis" title={ord.seller_account || ord.account_name || pur?.purchase_partner_name}>{ord.seller_account || ord.account_name || pur?.purchase_partner_name || '—'}</td>}
                           {visibleColumnsReady['product_name'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ord.product_name}>
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold overflow-hidden text-ellipsis" title={ord.product_name}>
                               <div className="flex items-center gap-2 max-w-full overflow-hidden">
                                 {ord.product_image && (
                                   /* eslint-disable-next-line @next/next/no-img-element */
@@ -1848,15 +1912,15 @@ export default function ShipmentsPage() {
                               </div>
                             </td>
                           )}
-                          {visibleColumnsReady['qty'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">{ord.qty || 1}</td>}
-                          {visibleColumnsReady['consignee_name'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">{ord.consignee_name || ord.buyer_name || '—'}</td>}
+                          {visibleColumnsReady['qty'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327] overflow-hidden text-ellipsis">{ord.qty || 1}</td>}
+                          {visibleColumnsReady['consignee_name'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327] overflow-hidden text-ellipsis">{ord.consignee_name || ord.buyer_name || '—'}</td>}
                           {visibleColumnsReady['shipment_address_1'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={ord.shipment_address_1}>{ord.shipment_address_1 || '—'}</td>}
                           {visibleColumnsReady['shipment_address_2'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={ord.shipment_address_2}>{ord.shipment_address_2 || '—'}</td>}
-                          {visibleColumnsReady['city'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.city || '—'}</td>}
-                          {visibleColumnsReady['state'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">{ord.state || '—'}</td>}
-                          {visibleColumnsReady['zip_code'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">{ord.zip_code || '—'}</td>}
+                          {visibleColumnsReady['city'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium overflow-hidden text-ellipsis">{ord.city || '—'}</td>}
+                          {visibleColumnsReady['state'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium overflow-hidden text-ellipsis">{ord.state || '—'}</td>}
+                          {visibleColumnsReady['zip_code'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327] overflow-hidden text-ellipsis">{ord.zip_code || '—'}</td>}
                           {visibleColumnsReady['mobile_number'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327] overflow-hidden text-ellipsis">
                               {ord.mobile_number ? (
                                 <span className="inline-flex items-center gap-1">
                                   <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
@@ -1865,13 +1929,18 @@ export default function ShipmentsPage() {
                               ) : '—'}
                             </td>
                           )}
-                          {visibleColumnsReady['country'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">{ord.country || 'USA'}</td>}
+                          {visibleColumnsReady['country'] !== false && <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">{ord.country || 'USA'}</td>}
 
                           {/* STATUS Column */}
                           {visibleColumnsReady['status'] !== false && (
                             <td className="py-2 px-3 border-r border-[#e0e0e0] text-center">
                               <div className="inline-flex items-center justify-center gap-1.5">
-                                {isInStock ? (
+                                {isHoldOrder ? (
+                                  <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-400 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs ring-1 ring-amber-400">
+                                    <PauseCircle className="w-3 h-3 text-amber-700" />
+                                    <span>On Hold</span>
+                                  </span>
+                                ) : isInStock ? (
                                   <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px] uppercase rounded-xs inline-flex items-center gap-1.5 shadow-2xs">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
                                     <span>In Stock</span>
@@ -2015,36 +2084,36 @@ export default function ShipmentsPage() {
           ) : (
             <>
               <div className="table-container overflow-x-auto">
-                <ResizableTable className="w-full text-left text-xs border-collapse">
+                <ResizableTable storageKey="shipments_dispatched_cols" className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#f0f0f1] text-[#1d2327] font-bold border-b border-[#c3c4c7] whitespace-nowrap">
-                      {visibleColumnsDispatched['carrier_partner'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Carrier Partner</th>}
-                      {visibleColumnsDispatched['awb_tracking'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">AWB / Tracking</th>}
-                      {visibleColumnsDispatched['forwarding_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Forwarding #</th>}
-                      {visibleColumnsDispatched['shipping_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipping Date</th>}
-                      {visibleColumnsDispatched['last_delivery_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Last Delivery Date</th>}
-                      {visibleColumnsDispatched['arriving_date'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Arrive Date</th>}
-                      {visibleColumnsDispatched['order_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Order ID</th>}
-                      {visibleColumnsDispatched['po_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">PO</th>}
-                      {visibleColumnsDispatched['shipment_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Shipment No</th>}
-                      {visibleColumnsDispatched['product_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[200px]">Product Name</th>}
-                      {visibleColumnsDispatched['qty'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] text-center">Qty</th>}
-                      {visibleColumnsDispatched['consignee_name'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Consignee Name</th>}
-                      {visibleColumnsDispatched['shipment_address_1'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
-                      {visibleColumnsDispatched['shipment_address_2'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
-                      {visibleColumnsDispatched['city'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">City</th>}
-                      {visibleColumnsDispatched['state'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">State</th>}
-                      {visibleColumnsDispatched['zip_code'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Zip Code</th>}
-                      {visibleColumnsDispatched['mobile_number'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Contact Number</th>}
-                      {visibleColumnsDispatched['country'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Country</th>}
-                      {visibleColumnsDispatched['weight'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Weight (kg / oz)</th>}
-                      {visibleColumnsDispatched['dimensions'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Dimensions (cm)</th>}
-                      {visibleColumnsDispatched['vol_wt'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Vol. Wt (kg)</th>}
-                      {visibleColumnsDispatched['cost_breakdown'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Cost Breakdown</th>}
-                      {visibleColumnsDispatched['total_cost'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Total Cost (₹)</th>}
-                      {visibleColumnsDispatched['forwarding_id'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap">Forwarding ID</th>}
-                      {visibleColumnsDispatched['status'] !== false && <th className="py-2.5 px-3 border-r border-[#c3c4c7]">Status</th>}
-                      {visibleColumnsDispatched['actions'] !== false && <th className="py-2.5 px-3 text-right">Actions</th>}
+                      {visibleColumnsDispatched['carrier_partner'] !== false && <th data-col="carrier_partner" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[120px]">Carrier Partner</th>}
+                      {visibleColumnsDispatched['awb_tracking'] !== false && <th data-col="awb_tracking" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">AWB / Tracking</th>}
+                      {visibleColumnsDispatched['forwarding_number'] !== false && <th data-col="forwarding_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[125px]">Forwarding #</th>}
+                      {visibleColumnsDispatched['shipping_date'] !== false && <th data-col="shipping_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Shipping Date</th>}
+                      {visibleColumnsDispatched['last_delivery_date'] !== false && <th data-col="last_delivery_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[115px]">Last Delivery Date</th>}
+                      {visibleColumnsDispatched['arriving_date'] !== false && <th data-col="arriving_date" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Arrive Date</th>}
+                      {visibleColumnsDispatched['order_number'] !== false && <th data-col="order_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[130px]">Order ID</th>}
+                      {visibleColumnsDispatched['po_number'] !== false && <th data-col="po_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[85px]">PO</th>}
+                      {visibleColumnsDispatched['shipment_id'] !== false && <th data-col="shipment_id" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Shipment No</th>}
+                      {visibleColumnsDispatched['product_name'] !== false && <th data-col="product_name" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[220px]">Product Name</th>}
+                      {visibleColumnsDispatched['qty'] !== false && <th data-col="qty" className="py-2.5 px-3 border-r border-[#c3c4c7] text-center min-w-[60px]">Qty</th>}
+                      {visibleColumnsDispatched['consignee_name'] !== false && <th data-col="consignee_name" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[125px]">Consignee Name</th>}
+                      {visibleColumnsDispatched['shipment_address_1'] !== false && <th data-col="shipment_address_1" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[160px]">Address Line 1</th>}
+                      {visibleColumnsDispatched['shipment_address_2'] !== false && <th data-col="shipment_address_2" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[140px]">Address Line 2</th>}
+                      {visibleColumnsDispatched['city'] !== false && <th data-col="city" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[100px]">City</th>}
+                      {visibleColumnsDispatched['state'] !== false && <th data-col="state" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[70px]">State</th>}
+                      {visibleColumnsDispatched['zip_code'] !== false && <th data-col="zip_code" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[80px]">Zip Code</th>}
+                      {visibleColumnsDispatched['mobile_number'] !== false && <th data-col="mobile_number" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[110px]">Contact Number</th>}
+                      {visibleColumnsDispatched['country'] !== false && <th data-col="country" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[80px]">Country</th>}
+                      {visibleColumnsDispatched['weight'] !== false && <th data-col="weight" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Weight (kg / oz)</th>}
+                      {visibleColumnsDispatched['dimensions'] !== false && <th data-col="dimensions" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[105px]">Dimensions (cm)</th>}
+                      {visibleColumnsDispatched['vol_wt'] !== false && <th data-col="vol_wt" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[90px]">Vol. Wt (kg)</th>}
+                      {visibleColumnsDispatched['cost_breakdown'] !== false && <th data-col="cost_breakdown" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[120px]">Cost Breakdown</th>}
+                      {visibleColumnsDispatched['total_cost'] !== false && <th data-col="total_cost" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[95px]">Total Cost (₹)</th>}
+                      {visibleColumnsDispatched['forwarding_id'] !== false && <th data-col="forwarding_id" className="py-2.5 px-3 border-r border-[#c3c4c7] whitespace-nowrap min-w-[120px]">Forwarding ID</th>}
+                      {visibleColumnsDispatched['status'] !== false && <th data-col="status" className="py-2.5 px-3 border-r border-[#c3c4c7] min-w-[110px]">Status</th>}
+                      {visibleColumnsDispatched['actions'] !== false && <th data-col="actions" className="py-2.5 px-3 text-right min-w-[90px]">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#dcdcde]">
@@ -2072,54 +2141,54 @@ export default function ShipmentsPage() {
                       return (
                         <tr key={ship.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f6f7f7]'} hover:bg-[#e8f3fc] transition-colors whitespace-nowrap`}>
                           {visibleColumnsDispatched['carrier_partner'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327] overflow-hidden text-ellipsis">
                               <span className={`px-2 py-0.5 rounded-xs border font-bold text-[10px] ${isRbs ? 'bg-blue-100 text-blue-900 border-blue-300' : 'bg-orange-100 text-orange-900 border-orange-300'}`}>
                                 {ship.shipment_partner}
                               </span>
                             </td>
                           )}
                           {visibleColumnsDispatched['awb_tracking'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1] overflow-hidden text-ellipsis">
                               {ship.awb_number || ship.tracking_id}
                             </td>
                           )}
                           {visibleColumnsDispatched['forwarding_number'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] font-semibold">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#50575e] font-semibold overflow-hidden text-ellipsis">
                               {ship.forwarding_number || '—'}
                             </td>
                           )}
                           {visibleColumnsDispatched['shipping_date'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">
                               {shippingDate}
                             </td>
                           )}
                           {visibleColumnsDispatched['last_delivery_date'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">
                               {lastDeliveryDate}
                             </td>
                           )}
                           {visibleColumnsDispatched['arriving_date'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">
                               {arriveDate}
                             </td>
                           )}
                           {visibleColumnsDispatched['order_number'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-bold text-[#2271b1] overflow-hidden text-ellipsis">
                               {orderId}
                             </td>
                           )}
                           {visibleColumnsDispatched['po_number'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[11px] font-bold text-[#1d2327] overflow-hidden text-ellipsis">
                               {pur?.po_number || '—'}
                             </td>
                           )}
                           {visibleColumnsDispatched['shipment_id'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono font-semibold text-[#2271b1] overflow-hidden text-ellipsis">
                               {shipmentId}
                             </td>
                           )}
                           {visibleColumnsDispatched['product_name'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold" title={ship.product_name}>
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-semibold overflow-hidden text-ellipsis" title={ship.product_name}>
                               <div className="flex items-center gap-2 max-w-full overflow-hidden">
                                 {(ship.product_image || matchingOrder?.product_image) && (
                                   /* eslint-disable-next-line @next/next/no-img-element */
@@ -2137,42 +2206,42 @@ export default function ShipmentsPage() {
                             </td>
                           )}
                           {visibleColumnsDispatched['qty'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-center font-bold text-[#1d2327] overflow-hidden text-ellipsis">
                               {qty}
                             </td>
                           )}
                           {visibleColumnsDispatched['consignee_name'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-bold text-[#1d2327] overflow-hidden text-ellipsis">
                               {consignee}
                             </td>
                           )}
                           {visibleColumnsDispatched['shipment_address_1'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate" title={addr1}>
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[160px] truncate overflow-hidden text-ellipsis" title={addr1}>
                               {addr1}
                             </td>
                           )}
                           {visibleColumnsDispatched['shipment_address_2'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate" title={addr2}>
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#50575e] max-w-[140px] truncate overflow-hidden text-ellipsis" title={addr2}>
                               {addr2}
                             </td>
                           )}
                           {visibleColumnsDispatched['city'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium overflow-hidden text-ellipsis">
                               {city}
                             </td>
                           )}
                           {visibleColumnsDispatched['state'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] text-[#1d2327] font-medium overflow-hidden text-ellipsis">
                               {state}
                             </td>
                           )}
                           {visibleColumnsDispatched['zip_code'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327] overflow-hidden text-ellipsis">
                               {zipCode}
                             </td>
                           )}
                           {visibleColumnsDispatched['mobile_number'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-mono text-[#1d2327] overflow-hidden text-ellipsis">
                               {mobile !== '—' ? (
                                 <span className="inline-flex items-center gap-1">
                                   <Phone className="w-2.5 h-2.5 text-[#2271b1]" />
@@ -2182,7 +2251,7 @@ export default function ShipmentsPage() {
                             </td>
                           )}
                           {visibleColumnsDispatched['country'] !== false && (
-                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327]">
+                            <td className="py-2.5 px-3 border-r border-[#e0e0e0] font-medium text-[#1d2327] overflow-hidden text-ellipsis">
                               {country}
                             </td>
                           )}
