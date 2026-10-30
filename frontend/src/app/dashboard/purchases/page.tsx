@@ -81,8 +81,14 @@ export default function PurchasesPage() {
       const purRes = await purchasesApi.list().catch(() => ({ data: [] }));
       const meRes = await authApi.getMe().catch(() => ({ data: null }));
       setOrders(ordRes.data || []);
-      setInventoryList(invRes.data || []);
-      setPurchases(purRes.data || []);
+      const purData = (purRes.data || []).sort((a: any, b: any) => {
+        const aOFS = a.status === 'OFS' || a.purchase_partner_name === 'OFS' || a.notes?.includes('Out of Stock');
+        const bOFS = b.status === 'OFS' || b.purchase_partner_name === 'OFS' || b.notes?.includes('Out of Stock');
+        if (aOFS && !bOFS) return 1;
+        if (!aOFS && bOFS) return -1;
+        return 0;
+      });
+      setPurchases(purData);
       setCurrentUser(meRes?.data || null);
     } catch (err) {
       console.error(err);
@@ -157,7 +163,13 @@ export default function PurchasesPage() {
   };
 
   // Filter orders waiting for purchase action (Step 1 - Pending Purchase Entry):
-  const purOrderIds = new Set(purchases.map(p => String(p.order_id)));
+  const validPurchases = purchases.filter(p =>
+    p.status !== 'OFS' &&
+    p.purchase_partner_name !== 'OFS' &&
+    !p.notes?.includes('Out of Stock') &&
+    !p.notes?.includes('OFS')
+  );
+  const purOrderIds = new Set(validPurchases.map(p => String(p.order_id)));
   const pendingOrders = orders
     .filter(o => isAllowedCompany(o.company))
     .filter(o => !purOrderIds.has(String(o.id)));
@@ -451,6 +463,7 @@ export default function PurchasesPage() {
 
         const allOFS = purchaseItems.length > 0 && purchaseItems.every(it => it.is_ofs);
         const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
+        const finalOrderStatus = allOFS ? 'OFS' : (allInStock ? 'in stock' : (selectedOrder.company || 'Purchased'));
 
         await ordersApi.update(purchaseForm.order_id, {
           purchase_cost_inr: totalPurchaseCostAll,
@@ -458,7 +471,8 @@ export default function PurchasesPage() {
           product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : selectedOrder.product_items,
           qty: purchaseItems.reduce((sum, it) => sum + (parseInt(String(it.qty)) || 1), 0),
           arriving_date: purchaseItems.find(it => !it.is_in_stock && !it.is_ofs)?.estimated_shipment_date || null,
-          status: ordStatus
+          status: ordStatus,
+          order_status: finalOrderStatus
         });
 
       } else {
@@ -485,6 +499,17 @@ export default function PurchasesPage() {
         const isStock = Boolean(purchaseForm.is_in_stock);
         const purStatus = isStock ? 'Received' : 'Pending';
         const ordStatus = isStock ? 'In Stock' : 'Purchase Pending';
+        const finalOrderStatus = isStock ? 'in stock' : (purchaseForm.company || selectedOrder.company || 'Purchased');
+
+        // Clean up any old purchases for this order (especially dummy OFS entries)
+        const existingPurs = purchases.filter((p: any) => p.order_id === purchaseForm.order_id);
+        for (const ep of existingPurs) {
+          try {
+            await purchasesApi.delete(ep.id);
+          } catch (e) {
+            console.error('Failed to clean old purchase', e);
+          }
+        }
 
         await purchasesApi.create({
           order_id: purchaseForm.order_id,
@@ -513,7 +538,8 @@ export default function PurchasesPage() {
           oi: purchaseForm.delivery_code || selectedOrder.oi,
           qty: parseInt(String(purchaseForm.qty)) || selectedOrder.qty || 1,
           arriving_date: purchaseForm.estimated_shipment_date || null,
-          status: ordStatus
+          status: ordStatus,
+          order_status: finalOrderStatus
         });
       }
 

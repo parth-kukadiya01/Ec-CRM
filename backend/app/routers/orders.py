@@ -960,7 +960,7 @@ KEY_MAPPINGS = {
     "product_image": ["productimage", "image", "imageurl", "img", "photourl"],
     "qty": ["qty", "quantity", "quantitypurchased", "units", "count", "itemqty"],
     "price_usd": ["priceusd", "price", "productprice", "itemprice", "unitprice", "amount", "totalprice", "itemsubtotal", "saleamount"],
-    "order_status": ["orderstatus", "carrierstatus", "stockstatus", "status"],
+    "order_status": ["orderstatus", "fulfillmentpartner", "sourcingpartner", "fulfillmentchannel", "fulfillment", "partner", "carrierstatus", "stockstatus", "status"],
     "consignee_name": ["consigneename", "consignee", "buyername", "buyer", "customername", "customer", "recipientname", "recipient", "name"],
     "shipment_address_1": ["shipmentaddress1", "address1", "shipaddress1", "streetaddress", "address", "street", "addressline1"],
     "shipment_address_2": ["shipmentaddress2", "address2", "shipaddress2", "apartment", "suite", "unit", "addressline2"],

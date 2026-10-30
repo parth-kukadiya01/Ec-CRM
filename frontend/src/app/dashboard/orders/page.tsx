@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { ordersApi, shipmentsApi, authApi, accountsApi, uploadApi, inventoryApi, purchasesApi, companiesApi, partnersMgmtApi, getImageUrl } from '@/lib/api';
 import ResizableTable from '@/components/ResizableTable';
 import ColumnVisibilityDropdown, { ColumnDefinition, ColumnPreset } from '@/components/ColumnVisibilityDropdown';
@@ -51,7 +51,7 @@ import {
 } from 'lucide-react';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
-const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta', 'OFS'];
+const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta'];
 
 interface PurchaseItem {
   id: string;
@@ -621,9 +621,14 @@ export default function OrdersPage() {
       setOrders(ordRes.data || []);
       setDbAccounts(accRes.data || []);
       setCompaniesList(compRes.data || []);
-      setPartnersList(partRes.data || []);
-      setInventoryList(invRes.data || []);
-      setPurchasesList(purRes.data || []);
+      const purData = (purRes.data || []).sort((a: any, b: any) => {
+        const aOFS = a.status === 'OFS' || a.purchase_partner_name === 'OFS' || a.notes?.includes('Out of Stock');
+        const bOFS = b.status === 'OFS' || b.purchase_partner_name === 'OFS' || b.notes?.includes('Out of Stock');
+        if (aOFS && !bOFS) return 1;
+        if (!aOFS && bOFS) return -1;
+        return 0;
+      });
+      setPurchasesList(purData);
       setShipmentsList(shipRes.data || []);
       const user = meRes?.data || null;
       setCurrentUser(user);
@@ -827,21 +832,50 @@ export default function OrdersPage() {
 
     if (selectedPurchaseStatus !== 'All') {
       result = result.filter(o => {
-        const matchingPur = purchasesList.find((p: any) => p.order_id === o.id);
+        const matchingPur = purchasesList.find((p: any) =>
+          p.order_id === o.id &&
+          p.status !== 'OFS' &&
+          p.purchase_partner_name !== 'OFS' &&
+          !p.notes?.includes('Out of Stock') &&
+          !p.notes?.includes('OFS')
+        ) || purchasesList.find((p: any) => p.order_id === o.id);
+
+        const hasValidPurchase = Boolean(
+          matchingPur &&
+          matchingPur.status !== 'OFS' &&
+          matchingPur.purchase_partner_name !== 'OFS' &&
+          !matchingPur.notes?.includes('Out of Stock') &&
+          !matchingPur.notes?.includes('OFS')
+        );
+
         const isStockDone = Boolean(
-          matchingPur && (
+          (matchingPur && (
             matchingPur.is_in_stock ||
             matchingPur.notes?.includes('In-Stock') ||
             matchingPur.purchase_partner_name === 'In Stock' ||
             matchingPur.bank === 'In Stock'
+          )) ||
+          o.status === 'In Stock' ||
+          (o.order_status && o.order_status.toLowerCase() === 'in stock')
+        );
+
+        const isPurchaseDone = Boolean(
+          !isStockDone && (
+            hasValidPurchase ||
+            (o.purchase_cost_inr !== null && Number(o.purchase_cost_inr) > 0 && o.status !== 'OFS' && (o.order_status || '').toLowerCase() !== 'ofs')
           )
         );
-        const isPurchaseDone = Boolean(matchingPur && !isStockDone && matchingPur.status !== 'OFS');
+
         const isOFSDone = Boolean(
-          matchingPur?.status === 'OFS' ||
-          matchingPur?.purchase_partner_name === 'OFS' ||
-          o.status === 'OFS' ||
-          (o.order_status && o.order_status.toLowerCase() === 'ofs')
+          !isPurchaseDone && !isStockDone && (
+            o.status === 'OFS' ||
+            (o.order_status && o.order_status.toLowerCase() === 'ofs') ||
+            (matchingPur && (
+              matchingPur.status === 'OFS' ||
+              matchingPur.purchase_partner_name === 'OFS' ||
+              matchingPur.notes?.includes('OFS')
+            ))
+          )
         );
 
         if (selectedPurchaseStatus === 'due') {
@@ -1170,29 +1204,47 @@ export default function OrdersPage() {
       setPurchaseItems([]);
     }
 
-    const existingPur = existingPurs[0];
-    const isStock = isInStock !== undefined ? isInStock : Boolean(existingPur?.is_in_stock || existingPur?.notes?.includes('In-Stock') || existingPur?.purchase_partner_name === 'In Stock');
+    const existingPur = existingPurs.find((p: any) =>
+      p.status !== 'OFS' &&
+      p.purchase_partner_name !== 'OFS' &&
+      !p.notes?.includes('Out of Stock') &&
+      !p.notes?.includes('OFS')
+    ) || existingPurs[0];
+
+    const isPurOFS = Boolean(
+      existingPur && (
+        existingPur.status === 'OFS' ||
+        existingPur.purchase_partner_name === 'OFS' ||
+        existingPur.notes?.includes('OFS')
+      )
+    );
+
+    const isStock = isInStock !== undefined
+      ? isInStock
+      : Boolean(!isPurOFS && (existingPur?.is_in_stock || existingPur?.notes?.includes('In-Stock') || existingPur?.purchase_partner_name === 'In Stock'));
 
     setPurchaseForm({
       order_id: order.id,
       order_number: order.order_number || `#ORD-${order.id}`,
-      order_date: existingPur?.order_date || order.order_process_date || order.order_date || new Date().toISOString().split('T')[0],
-      product_name: existingPur?.product_name || order.product_name || '',
-      sku: existingPur?.sku || matchedInv?.sku || '',
-      gst_type: existingPur?.gst_type || 'GST',
-      bank: existingPur?.bank || '',
-      po_number: existingPur?.po_number || '',
-      purchase_value: existingPur?.purchase_value || order.purchase_cost_inr || 0,
-      other_cost: existingPur?.other_cost || 0,
-      extra_cost: existingPur?.extra_cost || 0,
-      delivery_code: existingPur?.delivery_code || order.oi || order.shipment_id || '',
-      estimated_shipment_date: existingPur?.estimated_shipment_date || new Date().toISOString().split('T')[0],
-      account_name: existingPur?.account_name || order.account_name || '',
-      purchase_partner_name: existingPur?.purchase_partner_name || (isStock ? (order.seller_account || order.account_name || 'In-Stock Inventory') : (order.seller_account || order.account_name || 'Aryastore Partner')),
-      payment_status: existingPur?.payment_status || 'Paid',
-      notes: existingPur?.notes || (isStock ? 'In-Stock Purchase Entry' : ''),
-      company: existingPur?.company || order.company || '',
-      qty: existingPur?.qty || order.qty || 1,
+      order_date: (!isPurOFS && existingPur?.order_date) || order.order_process_date || order.order_date || new Date().toISOString().split('T')[0],
+      product_name: (!isPurOFS && existingPur?.product_name) || order.product_name || '',
+      sku: (!isPurOFS && existingPur?.sku) || matchedInv?.sku || '',
+      gst_type: (!isPurOFS && existingPur?.gst_type) || 'GST',
+      bank: (!isPurOFS && existingPur?.bank && existingPur.bank !== 'OFS') ? existingPur.bank : (isStock ? 'In Stock' : ''),
+      po_number: (!isPurOFS && existingPur?.po_number) || '',
+      purchase_value: (!isPurOFS && existingPur?.purchase_value !== undefined && existingPur?.purchase_value !== null) ? existingPur.purchase_value : (order.purchase_cost_inr || 0),
+      other_cost: (!isPurOFS && existingPur?.other_cost) || 0,
+      extra_cost: (!isPurOFS && existingPur?.extra_cost) || 0,
+      delivery_code: (!isPurOFS && existingPur?.delivery_code) || order.oi || order.shipment_id || '',
+      estimated_shipment_date: (!isPurOFS && existingPur?.estimated_shipment_date) || new Date().toISOString().split('T')[0],
+      account_name: (!isPurOFS && existingPur?.account_name) || order.account_name || '',
+      purchase_partner_name: (!isPurOFS && existingPur?.purchase_partner_name && existingPur.purchase_partner_name !== 'OFS')
+        ? existingPur.purchase_partner_name
+        : (isStock ? (order.seller_account || order.account_name || 'In-Stock Inventory') : (order.seller_account || order.account_name || 'Aryastore Partner')),
+      payment_status: (!isPurOFS && existingPur?.payment_status) || 'Paid',
+      notes: (!isPurOFS && existingPur?.notes && !existingPur.notes.includes('OFS')) ? existingPur.notes : (isStock ? 'In-Stock Purchase Entry' : ''),
+      company: (!isPurOFS && existingPur?.company) || order.company || '',
+      qty: (!isPurOFS && existingPur?.qty) || order.qty || 1,
       direct_to_shipment: true,
       is_in_stock: isStock,
     });
@@ -1300,6 +1352,7 @@ export default function OrdersPage() {
         } catch (e) { }
 
         const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
+        const finalOrderStatus = allOFS ? 'OFS' : (allInStock ? 'in stock' : (selectedOrderForPurchase.company || 'Purchased'));
 
         await ordersApi.update(selectedOrderForPurchase.id, {
           purchase_cost_inr: totalPurchaseCostAll,
@@ -1307,7 +1360,8 @@ export default function OrdersPage() {
           product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : selectedOrderForPurchase.product_items,
           qty: purchaseItems.reduce((sum, it) => sum + (parseInt(String(it.qty)) || 1), 0),
           arriving_date: purchaseItems.find(it => !it.is_in_stock && !it.is_ofs)?.estimated_shipment_date || null,
-          status: ordStatus
+          status: ordStatus,
+          order_status: finalOrderStatus
         });
 
         setPurchasesList(prev => {
@@ -1320,6 +1374,7 @@ export default function OrdersPage() {
           purchase_cost_inr: totalPurchaseCostAll,
           product_items: updatedProductItems.length > 0 ? JSON.stringify(updatedProductItems) : o.product_items,
           status: ordStatus,
+          order_status: finalOrderStatus,
           arriving_date: purchaseItems.find(it => !it.is_in_stock)?.estimated_shipment_date || o.arriving_date
         } : o));
 
@@ -1359,6 +1414,17 @@ export default function OrdersPage() {
       const isStock = Boolean(purchaseForm.is_in_stock);
       const purStatus = isStock ? 'Received' : 'Pending';
       const ordStatus = isStock ? 'In Stock' : 'Purchase Pending';
+      const finalOrderStatus = isStock ? 'in stock' : (purchaseForm.company || selectedOrderForPurchase.company || 'Purchased');
+
+      // Clean up any old purchases for this order (especially dummy OFS entries)
+      const existingPurs = purchasesList.filter((p: any) => p.order_id === purchaseForm.order_id);
+      for (const ep of existingPurs) {
+        try {
+          await purchasesApi.delete(ep.id);
+        } catch (e) {
+          console.error('Failed to clean old purchase', e);
+        }
+      }
 
       const newPurchaseRecord = {
         order_id: purchaseForm.order_id,
@@ -1383,13 +1449,8 @@ export default function OrdersPage() {
       };
 
       setPurchasesList(prev => {
-        const idx = prev.findIndex((p: any) => p.order_id === purchaseForm.order_id);
-        if (idx >= 0) {
-          const updated = [...prev];
-          updated[idx] = { ...updated[idx], ...newPurchaseRecord };
-          return updated;
-        }
-        return [newPurchaseRecord, ...prev];
+        const filtered = prev.filter((p: any) => p.order_id !== purchaseForm.order_id);
+        return [newPurchaseRecord, ...filtered];
       });
 
       setOrders(prev => prev.map(o => o.id === purchaseForm.order_id ? {
@@ -1397,6 +1458,7 @@ export default function OrdersPage() {
         purchase_cost_inr: totalCost,
         oi: purchaseForm.delivery_code || o.oi,
         status: ordStatus,
+        order_status: finalOrderStatus,
         arriving_date: purchaseForm.estimated_shipment_date || o.arriving_date
       } : o));
 
@@ -1427,7 +1489,8 @@ export default function OrdersPage() {
         oi: purchaseForm.delivery_code || selectedOrderForPurchase.oi,
         qty: parseInt(String(purchaseForm.qty)) || selectedOrderForPurchase.qty || 1,
         arriving_date: purchaseForm.estimated_shipment_date || null,
-        status: ordStatus
+        status: ordStatus,
+        order_status: finalOrderStatus
       });
 
       setShowPurchaseModal(false);
@@ -2104,13 +2167,12 @@ export default function OrdersPage() {
               return (
                 <button
                   onClick={() => setSelectedHoldStatus(selectedHoldStatus === 'hold' ? 'All' : 'hold')}
-                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${
-                    selectedHoldStatus === 'hold'
-                      ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
-                      : holdCount > 0
-                        ? 'bg-amber-50 text-amber-900 border-amber-400 hover:bg-amber-100'
-                        : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
-                  }`}
+                  className={`px-3 py-1 rounded-xs text-xs font-bold transition-all border flex items-center gap-1.5 ${selectedHoldStatus === 'hold'
+                    ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                    : holdCount > 0
+                      ? 'bg-amber-50 text-amber-900 border-amber-400 hover:bg-amber-100'
+                      : 'bg-white text-[#2c3338] border-[#c3c4c7] hover:bg-[#f0f0f1]'
+                    }`}
                   title="Orders placed on hold"
                 >
                   <PauseCircle className={`w-3.5 h-3.5 ${selectedHoldStatus === 'hold' ? 'text-white' : holdCount > 0 ? 'text-amber-700 animate-pulse' : 'text-[#50575e]'}`} />
@@ -2302,7 +2364,7 @@ export default function OrdersPage() {
             )}
             {selectedStatus !== 'All' && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#f0f0f1] text-[#1d2327] font-bold rounded-xs border border-[#c3c4c7] text-[11px]">
-                Status: {selectedStatus}
+                {selectedStatus === 'Due Purchase' ? 'Due Purchase (5d)' : `Status: ${selectedStatus}`}
                 <button onClick={() => setSelectedStatus('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
               </span>
             )}
@@ -2366,7 +2428,13 @@ export default function OrdersPage() {
                 <tbody className="divide-y divide-[#dcdcde] text-[#2c3338]">
                   {filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((ord, index) => {
                     const isEven = index % 2 === 0;
-                    const matchingPur = purchasesList.find((p: any) => p.order_id === ord.id);
+                    const matchingPur = purchasesList.find((p: any) =>
+                      p.order_id === ord.id &&
+                      p.status !== 'OFS' &&
+                      p.purchase_partner_name !== 'OFS' &&
+                      !p.notes?.includes('Out of Stock') &&
+                      !p.notes?.includes('OFS')
+                    ) || purchasesList.find((p: any) => p.order_id === ord.id);
                     const arriveDate = ord.arriving_date || matchingPur?.estimated_shipment_date || '—';
                     const companyColorMap: { [key: string]: string } = {
                       ADBH: 'bg-emerald-100 text-emerald-900 border-emerald-300',
@@ -2567,29 +2635,28 @@ export default function OrdersPage() {
                               const s = matchedStatus.toLowerCase();
                               const colorClass =
                                 (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
-                                  s === 'ofs' ? 'bg-rose-100 text-rose-900 border-rose-300 hover:bg-rose-200 font-extrabold' :
-                                    s === 'hold' ? 'bg-amber-100 text-amber-900 border-amber-400 hover:bg-amber-200 font-extrabold ring-1 ring-amber-400' :
-                                      s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
-                                        s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
-                                          s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
-                                            'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200';
+                                  s === 'adbh' ? 'bg-blue-100 text-blue-900 border-blue-300 hover:bg-blue-200' :
+                                    s === 'canton' ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200' :
+                                      s === 'doweta' ? 'bg-orange-100 text-orange-900 border-orange-300 hover:bg-orange-200' :
+                                        'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200';
                               return (
                                 <select
                                   value={matchedStatus || ''}
                                   onChange={(e) => handleStatusChange(ord.id, e.target.value)}
                                   className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
+                                  title="Change Order Status"
                                 >
                                   {!matchedStatus && <option value="" className="bg-white text-[#50575e]">—</option>}
-                                  {ORDER_STATUS_OPTIONS.map((status) => (
-                                    <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
-                                      {status}
-                                    </option>
-                                  ))}
                                   {matchedStatus && !ORDER_STATUS_OPTIONS.some(o => o.toLowerCase() === matchedStatus.toLowerCase()) && (
                                     <option value={matchedStatus} className="bg-white text-[#1d2327] font-bold">
                                       {matchedStatus}
                                     </option>
                                   )}
+                                  {ORDER_STATUS_OPTIONS.map((status) => (
+                                    <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
+                                      {status}
+                                    </option>
+                                  ))}
                                 </select>
                               );
                             })()}
@@ -2708,24 +2775,42 @@ export default function OrdersPage() {
                                 );
                               }
 
-                              const isOFSDone = Boolean(
-                                (matchingPur && (
-                                  matchingPur.status === 'OFS' ||
-                                  matchingPur.purchase_partner_name === 'OFS' ||
-                                  matchingPur.notes?.includes('OFS')
-                                )) ||
-                                ord.order_status?.toLowerCase() === 'ofs' ||
-                                ord.status?.toLowerCase() === 'ofs'
+                              const validPur = matchingPur && (
+                                matchingPur.status !== 'OFS' &&
+                                matchingPur.purchase_partner_name !== 'OFS' &&
+                                !matchingPur.notes?.includes('Out of Stock') &&
+                                !matchingPur.notes?.includes('OFS')
                               );
+
                               const isStockDone = Boolean(
-                                !isOFSDone && matchingPur && (
+                                (matchingPur && (
                                   matchingPur.is_in_stock ||
                                   matchingPur.notes?.includes('In-Stock') ||
                                   matchingPur.purchase_partner_name === 'In Stock' ||
                                   matchingPur.bank === 'In Stock'
+                                )) ||
+                                ord.status === 'In Stock' ||
+                                (ord.order_status && ord.order_status.toLowerCase() === 'in stock')
+                              );
+
+                              const isPurchaseDone = Boolean(
+                                !isStockDone && (
+                                  validPur ||
+                                  (ord.purchase_cost_inr !== null && Number(ord.purchase_cost_inr) > 0 && ord.status !== 'OFS' && (ord.order_status || '').toLowerCase() !== 'ofs')
                                 )
                               );
-                              const isPurchaseDone = Boolean(!isOFSDone && matchingPur && !isStockDone);
+
+                              const isOFSDone = Boolean(
+                                !isPurchaseDone && !isStockDone && (
+                                  ord.order_status?.toLowerCase() === 'ofs' ||
+                                  ord.status?.toLowerCase() === 'ofs' ||
+                                  (matchingPur && (
+                                    matchingPur.status === 'OFS' ||
+                                    matchingPur.purchase_partner_name === 'OFS' ||
+                                    matchingPur.notes?.includes('OFS')
+                                  ))
+                                )
+                              );
                               const actionTimestamp = formatActionDateTime(matchingPur?.created_at, ord.order_process_date || ord.order_date);
 
                               if (isOFSDone) {
@@ -2826,11 +2911,10 @@ export default function OrdersPage() {
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 onClick={() => handleToggleHold(ord)}
-                                className={`p-1 rounded-xs transition-all ${
-                                  ord.is_hold
-                                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 ring-1 ring-amber-400'
-                                    : 'hover:bg-amber-500 hover:text-white text-amber-700'
-                                }`}
+                                className={`p-1 rounded-xs transition-all ${ord.is_hold
+                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 ring-1 ring-amber-400'
+                                  : 'hover:bg-amber-500 hover:text-white text-amber-700'
+                                  }`}
                                 title={ord.is_hold ? `Order is ON HOLD (${ord.hold_reason || 'No reason specified'}). Click to Release from Hold` : 'Put Order on Hold'}
                               >
                                 {ord.is_hold ? <PlayCircle className="w-3.5 h-3.5 text-amber-700" /> : <PauseCircle className="w-3.5 h-3.5" />}
@@ -2931,8 +3015,8 @@ export default function OrdersPage() {
                     <div>
                       <h4 className="font-bold text-rose-900 text-xs">
                         {modalError.toLowerCase().includes('shipment id') ? 'Duplicate Shipment ID Detected' :
-                         modalError.toLowerCase().includes('order id') ? 'Duplicate Order ID Detected' :
-                         'Order Submission Error'}
+                          modalError.toLowerCase().includes('order id') ? 'Duplicate Order ID Detected' :
+                            'Order Submission Error'}
                       </h4>
                       <p className="text-rose-800 font-medium text-xs mt-1 leading-relaxed">{modalError}</p>
                       <p className="text-[11px] text-rose-600 mt-1">Please update the field highlighted below with a unique value before continuing.</p>
@@ -3062,11 +3146,10 @@ export default function OrdersPage() {
                           setModalError(null);
                         }
                       }}
-                      className={`w-full bg-white border p-2 font-mono font-bold text-[#1d2327] outline-none transition-all ${
-                        duplicateOrderNumberOrder || modalFieldErrors.order_number
-                          ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
-                          : 'border-[#8c8f94] focus:border-[#2271b1]'
-                      }`}
+                      className={`w-full bg-white border p-2 font-mono font-bold text-[#1d2327] outline-none transition-all ${duplicateOrderNumberOrder || modalFieldErrors.order_number
+                        ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
+                        : 'border-[#8c8f94] focus:border-[#2271b1]'
+                        }`}
                       required
                     />
                     {(duplicateOrderNumberOrder || modalFieldErrors.order_number) && (
@@ -3101,11 +3184,10 @@ export default function OrdersPage() {
                           setModalError(null);
                         }
                       }}
-                      className={`w-full bg-white border p-2 font-mono font-bold outline-none transition-all ${
-                        duplicateShipmentOrder || modalFieldErrors.shipment_id
-                          ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
-                          : 'border-[#8c8f94] text-[#2271b1] focus:border-[#2271b1]'
-                      }`}
+                      className={`w-full bg-white border p-2 font-mono font-bold outline-none transition-all ${duplicateShipmentOrder || modalFieldErrors.shipment_id
+                        ? 'border-rose-500 bg-rose-50/40 text-rose-900 ring-2 ring-rose-200 focus:border-rose-600'
+                        : 'border-[#8c8f94] text-[#2271b1] focus:border-[#2271b1]'
+                        }`}
                     />
                     {(duplicateShipmentOrder || modalFieldErrors.shipment_id) && (
                       <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
@@ -3407,13 +3489,9 @@ export default function OrdersPage() {
                           >
                             <option value="">— Select Status —</option>
                             <option value="in stock">in stock</option>
-                            <option value="OFS">OFS</option>
-                            <option value="Hold">Hold</option>
                             <option value="ADBH">ADBH</option>
                             <option value="Canton">Canton</option>
                             <option value="Doweta">Doweta</option>
-                            <option value="RBS">RBS</option>
-                            <option value="Direct Selling">Direct Selling</option>
                           </select>
                         </div>
 
@@ -3616,13 +3694,9 @@ export default function OrdersPage() {
                       >
                         <option value="">— Select Status —</option>
                         <option value="in stock">in stock</option>
-                        <option value="OFS">OFS</option>
-                        <option value="Hold">Hold</option>
                         <option value="ADBH">ADBH</option>
                         <option value="Canton">Canton</option>
                         <option value="Doweta">Doweta</option>
-                        <option value="RBS">RBS</option>
-                        <option value="Direct Selling">Direct Selling</option>
                       </select>
                       <div className="text-[10px] text-[#50575e] mt-1">
                         Primary order status for single order tracking.
@@ -3860,17 +3934,14 @@ export default function OrdersPage() {
                       const inStockQty = itemInv?.stock_quantity || 0;
 
                       return (
-                        <div key={item.id} className={`border rounded-xs overflow-hidden ${
-                          item.is_ofs ? 'border-rose-300 bg-rose-50/20' : item.is_in_stock ? 'border-emerald-300 bg-emerald-50/20' : 'border-[#c3c4c7] bg-white'
-                        }`}>
-                          {/* Item Header */}
-                          <div className={`px-4 py-2.5 flex items-center justify-between ${
-                            item.is_ofs ? 'bg-rose-100/70 border-b border-rose-200' : item.is_in_stock ? 'bg-emerald-100/70 border-b border-emerald-200' : 'bg-[#f0f0f1] border-b border-[#c3c4c7]'
+                        <div key={item.id} className={`border rounded-xs overflow-hidden ${item.is_ofs ? 'border-rose-300 bg-rose-50/20' : item.is_in_stock ? 'border-emerald-300 bg-emerald-50/20' : 'border-[#c3c4c7] bg-white'
                           }`}>
+                          {/* Item Header */}
+                          <div className={`px-4 py-2.5 flex items-center justify-between ${item.is_ofs ? 'bg-rose-100/70 border-b border-rose-200' : item.is_in_stock ? 'bg-emerald-100/70 border-b border-emerald-200' : 'bg-[#f0f0f1] border-b border-[#c3c4c7]'
+                            }`}>
                             <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${
-                                item.is_ofs ? 'bg-rose-600 text-white' : item.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-[#2271b1] text-white'
-                              }`}>
+                              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${item.is_ofs ? 'bg-rose-600 text-white' : item.is_in_stock ? 'bg-emerald-600 text-white' : 'bg-[#2271b1] text-white'
+                                }`}>
                                 {idx + 1}
                               </span>
                               {item.product_image && (
@@ -3902,11 +3973,10 @@ export default function OrdersPage() {
                                   purchase_partner_name: selectedOrderForPurchase?.seller_account || selectedOrderForPurchase?.account_name || 'Aryastore Partner',
                                   notes: '',
                                 })}
-                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
-                                  !item.is_in_stock && !item.is_ofs
-                                    ? 'bg-[#2271b1] text-white shadow-xs'
-                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
-                                }`}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${!item.is_in_stock && !item.is_ofs
+                                  ? 'bg-[#2271b1] text-white shadow-xs'
+                                  : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
+                                  }`}
                               >
                                 Purchase
                               </button>
@@ -3918,11 +3988,10 @@ export default function OrdersPage() {
                                   purchase_partner_name: 'In-Stock Inventory',
                                   notes: 'In-Stock Order',
                                 })}
-                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
-                                  item.is_in_stock && !item.is_ofs
-                                    ? 'bg-emerald-600 text-white shadow-xs'
-                                    : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
-                                }`}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${item.is_in_stock && !item.is_ofs
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'bg-white text-[#50575e] hover:bg-slate-100 border border-[#c3c4c7]'
+                                  }`}
                               >
                                 In Stock ✓
                               </button>
@@ -3935,11 +4004,10 @@ export default function OrdersPage() {
                                   purchase_value: 0,
                                   notes: 'Out of Stock (OFS)',
                                 })}
-                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${
-                                  item.is_ofs
-                                    ? 'bg-rose-600 text-white shadow-xs'
-                                    : 'bg-white text-rose-700 hover:bg-rose-50 border border-rose-300'
-                                }`}
+                                className={`px-2.5 py-1 rounded-xs text-[10px] font-bold transition-all cursor-pointer ${item.is_ofs
+                                  ? 'bg-rose-600 text-white shadow-xs'
+                                  : 'bg-white text-rose-700 hover:bg-rose-50 border border-rose-300'
+                                  }`}
                               >
                                 ⚠ OFS
                               </button>
@@ -3997,7 +4065,7 @@ export default function OrdersPage() {
                                     <option key={st} value={st}>{st}</option>
                                   ))}
                                   {companiesList.map((comp: any) => (
-                                    <option key={comp.id || comp.name} value={comp.name}>{comp.name}</option>
+                                    <option key={comp.id || comp.company_name || comp.name} value={comp.company_name || comp.name}>{comp.company_name || comp.name}</option>
                                   ))}
                                 </select>
                               </div>

@@ -220,6 +220,7 @@ export default function ShipmentsPage() {
   const [selectedReadyStatus, setSelectedReadyStatus] = useState<string>('All');
   const [selectedDispatchedStatus, setSelectedDispatchedStatus] = useState<string>('All');
   const [selectedSellerAccount, setSelectedSellerAccount] = useState<string>('All');
+  const [selectedForwardingStatus, setSelectedForwardingStatus] = useState<string>('All');
   const [selectedLabelType, setSelectedLabelType] = useState<string>('All');
   const [dateFieldType, setDateFieldType] = useState<string>('process_date');
   const [startDate, setStartDate] = useState<string>('');
@@ -293,7 +294,13 @@ export default function ShipmentsPage() {
 
       const allOrders = ordRes.data || [];
       const shipList = shipRes.data || [];
-      const purList = purRes.data || [];
+      const purList = (purRes.data || []).sort((a: any, b: any) => {
+        const aOFS = a.status === 'OFS' || a.purchase_partner_name === 'OFS' || a.notes?.includes('Out of Stock');
+        const bOFS = b.status === 'OFS' || b.purchase_partner_name === 'OFS' || b.notes?.includes('Out of Stock');
+        if (aOFS && !bOFS) return 1;
+        if (!aOFS && bOFS) return -1;
+        return 0;
+      });
       setPurchases(purList);
       setAllOrdersList(allOrders);
       setCompaniesList(compRes.data || []);
@@ -304,11 +311,41 @@ export default function ShipmentsPage() {
       const existingShipmentOrderIds = new Set(
         shipList.map((s: any) => String(s.order_id)).filter(Boolean)
       );
-      const purOrderIds = new Set(purList.map((p: any) => String(p.order_id)));
+      // Valid non-OFS purchases count towards purOrderIds
+      const validPurchases = purList.filter((p: any) =>
+        p.status !== 'OFS' &&
+        p.purchase_partner_name !== 'OFS' &&
+        !p.notes?.includes('Out of Stock') &&
+        !p.notes?.includes('OFS')
+      );
+      const purOrderIds = new Set(validPurchases.map((p: any) => String(p.order_id)));
+
+      // Helper to determine if an order is currently in OFS (not yet purchased)
+      const isOFSOrder = (ord: any) => {
+        // If order has an active valid non-OFS purchase, it has been purchased!
+        if (purOrderIds.has(String(ord.id))) return false;
+        if (ord.purchase_cost_inr !== null && ord.purchase_cost_inr !== undefined && Number(ord.purchase_cost_inr) > 0) {
+          if (ord.status !== 'OFS' && (ord.order_status || '').toLowerCase() !== 'ofs') {
+            return false;
+          }
+        }
+        const orderPurs = purList.filter((p: any) => p.order_id === ord.id);
+        return (
+          ord.status === 'OFS' ||
+          (ord.order_status && ord.order_status.toLowerCase() === 'ofs') ||
+          (orderPurs.length > 0 && orderPurs.every((p: any) =>
+            p.status === 'OFS' ||
+            p.purchase_partner_name === 'OFS' ||
+            p.notes?.includes('Out of Stock') ||
+            p.notes?.includes('OFS')
+          ))
+        );
+      };
 
       // Orders with any Purchase Price (INR ₹) done or completed purchase entry show in Shipments:
-      // Exclude orders that already have a dispatched shipment so editing order status does not duplicate it into Ready tab
+      // Exclude orders that are currently in OFS or already have a dispatched shipment
       const ready = allOrders.filter((ord: any) =>
+        !isOFSOrder(ord) &&
         (
           purOrderIds.has(String(ord.id)) ||
           (ord.purchase_cost_inr !== null && ord.purchase_cost_inr !== undefined && Number(ord.purchase_cost_inr) > 0)
@@ -420,6 +457,7 @@ export default function ShipmentsPage() {
     selectedReadyStatus,
     selectedDispatchedStatus,
     selectedSellerAccount,
+    selectedForwardingStatus,
     selectedLabelType,
     dateFieldType,
     activeTab
@@ -540,6 +578,7 @@ export default function ShipmentsPage() {
     setSelectedReadyStatus('All');
     setSelectedDispatchedStatus('All');
     setSelectedSellerAccount('All');
+    setSelectedForwardingStatus('All');
     setSelectedLabelType('All');
     setDateFieldType('process_date');
     setStartDate('');
@@ -552,6 +591,7 @@ export default function ShipmentsPage() {
     selectedCarrier !== 'All' ||
     (activeTab === 'ready' ? selectedReadyStatus !== 'All' : selectedDispatchedStatus !== 'All') ||
     selectedSellerAccount !== 'All' ||
+    selectedForwardingStatus !== 'All' ||
     selectedLabelType !== 'All' ||
     startDate ||
     endDate ||
@@ -597,6 +637,16 @@ export default function ShipmentsPage() {
       return true;
     })
     .filter(o => {
+      const fwd = (o.label_tracking_id || '').trim();
+      if (selectedForwardingStatus === 'has_forwarding') {
+        return Boolean(fwd);
+      }
+      if (selectedForwardingStatus === 'no_forwarding') {
+        return !fwd;
+      }
+      return true;
+    })
+    .filter(o => {
       const pur = purchases.find((p: any) => p.order_id === o.id);
       const isInStock =
         (o.order_status || '').toLowerCase() === 'in stock' ||
@@ -627,6 +677,7 @@ export default function ShipmentsPage() {
       return matchesSearch(
         {
           ...o,
+          forwarding_id: o.label_tracking_id || '',
           po_number: pur?.po_number || '',
           arriving_date: o.arriving_date || pur?.estimated_shipment_date || '',
           consignee_name: o.consignee_name || o.buyer_name || '',
@@ -637,7 +688,7 @@ export default function ShipmentsPage() {
           country: o.country || '',
           address: `${o.shipment_address_1 || ''} ${o.shipment_address_2 || ''}`
         },
-        ['order_number', 'po_number', 'arriving_date', 'shipping_date', 'last_delivery_date', 'shipment_id', 'oi', 'product_name', 'buyer_name', 'consignee_name', 'contact_number', 'city', 'state', 'zip_code', 'country', 'address', 'company', 'account_name', 'delivery_service']
+        ['order_number', 'po_number', 'arriving_date', 'shipping_date', 'last_delivery_date', 'shipment_id', 'forwarding_id', 'oi', 'product_name', 'buyer_name', 'consignee_name', 'contact_number', 'city', 'state', 'zip_code', 'country', 'address', 'company', 'account_name', 'delivery_service']
       );
     });
 
@@ -685,6 +736,17 @@ export default function ShipmentsPage() {
       return true;
     })
     .filter(s => {
+      const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
+      const fwd = (s.forwarding_number || matchingOrder?.label_tracking_id || '').trim();
+      if (selectedForwardingStatus === 'has_forwarding') {
+        return Boolean(fwd);
+      }
+      if (selectedForwardingStatus === 'no_forwarding') {
+        return !fwd;
+      }
+      return true;
+    })
+    .filter(s => {
       if (selectedDispatchedStatus !== 'All') {
         const st = s.status || 'In Transit';
         if (st.toLowerCase() !== selectedDispatchedStatus.toLowerCase()) return false;
@@ -704,9 +766,12 @@ export default function ShipmentsPage() {
       const pur = purchases.find((p: any) => p.order_id === s.order_id);
       const matchingOrder = allOrdersList.find((o: any) => o.id === s.order_id);
       const arrDate = matchingOrder?.arriving_date || pur?.estimated_shipment_date || s.arriving_date || '';
+      const fwdVal = s.forwarding_number || matchingOrder?.label_tracking_id || '';
       return matchesSearch(
         {
           ...s,
+          forwarding_number: fwdVal,
+          forwarding_id: fwdVal,
           po_number: pur?.po_number || '',
           arriving_date: arrDate,
           shipping_date: matchingOrder?.shipping_date || s.shipping_date || '',
@@ -720,7 +785,7 @@ export default function ShipmentsPage() {
           country: matchingOrder?.country || s.country || '',
           address: `${matchingOrder?.shipment_address_1 || s.shipment_address_1 || ''} ${matchingOrder?.shipment_address_2 || s.shipment_address_2 || ''}`
         },
-        ['order_number', 'po_number', 'arriving_date', 'shipping_date', 'last_delivery_date', 'shipment_id', 'tracking_id', 'awb_number', 'forwarding_number', 'shipment_partner', 'product_name', 'buyer_name', 'consignee_name', 'contact_number', 'city', 'state', 'zip_code', 'country', 'address', 'company', 'notes']
+        ['order_number', 'po_number', 'arriving_date', 'shipping_date', 'last_delivery_date', 'shipment_id', 'tracking_id', 'awb_number', 'forwarding_number', 'forwarding_id', 'shipment_partner', 'product_name', 'buyer_name', 'consignee_name', 'contact_number', 'city', 'state', 'zip_code', 'country', 'address', 'company', 'notes']
       );
     });
 
@@ -1493,7 +1558,7 @@ export default function ShipmentsPage() {
         </div>
 
         {/* Row 2: Secondary Dropdown Filters Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2.5 pt-2 border-t border-[#e0e0e0]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5 pt-2 border-t border-[#e0e0e0]">
           {/* 1. Company Filter */}
           <div>
             <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
@@ -1561,6 +1626,23 @@ export default function ShipmentsPage() {
                   {acc}
                 </option>
               ))}
+            </select>
+          </div>
+
+          {/* 4. Forwarding ID Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Barcode className="w-3 h-3 text-[#2271b1]" />
+              <span>Forwarding ID</span>
+            </label>
+            <select
+              value={selectedForwardingStatus}
+              onChange={(e) => setSelectedForwardingStatus(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Forwarding IDs</option>
+              <option value="has_forwarding">With Forwarding ID</option>
+              <option value="no_forwarding">Without Forwarding ID</option>
             </select>
           </div>
 
@@ -1714,6 +1796,12 @@ export default function ShipmentsPage() {
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xs font-medium">
                 Account: <b>{selectedSellerAccount}</b>
                 <button onClick={() => setSelectedSellerAccount('All')} className="hover:text-slate-950 font-bold ml-0.5">×</button>
+              </span>
+            )}
+            {selectedForwardingStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-cyan-50 text-cyan-900 border border-cyan-200 rounded-xs font-medium">
+                Forwarding: <b>{selectedForwardingStatus === 'has_forwarding' ? 'With Forwarding ID' : 'Without Forwarding ID'}</b>
+                <button onClick={() => setSelectedForwardingStatus('All')} className="hover:text-cyan-950 font-bold ml-0.5">×</button>
               </span>
             )}
             {selectedLabelType !== 'All' && (

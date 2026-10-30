@@ -21,6 +21,7 @@ class PurchaseCreate(BaseModel):
     gst_type: Optional[str] = "GST"
     bank: Optional[str] = None
     po_number: Optional[str] = None
+    status: Optional[str] = "Purchased"
 
 class PurchaseUpdate(BaseModel):
     purchase_value: Optional[float] = None

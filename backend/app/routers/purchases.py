@@ -72,6 +72,29 @@ def create_purchase(
                 detail=f"Not authorized to purchase for this company. Allowed: {', '.join(allowed_comps)}"
             )
 
+    pur_status = getattr(pur_in, 'status', None) or "Purchased"
+    is_ofs_pur = (
+        pur_status == "OFS" or
+        (pur_in.purchase_partner_name and pur_in.purchase_partner_name.strip() == "OFS") or
+        ("Out of Stock" in (pur_in.notes or ""))
+    )
+
+    # When creating a real purchase (not OFS), clear old OFS placeholders and reset order OFS status
+    if not is_ofs_pur:
+        db.query(Purchase).filter(
+            Purchase.order_id == pur_in.order_id,
+            or_(
+                Purchase.status == "OFS",
+                Purchase.purchase_partner_name == "OFS",
+                Purchase.notes.ilike("%Out of Stock%")
+            )
+        ).delete(synchronize_session=False)
+
+        if order.status == "OFS":
+            order.status = "Purchase Pending"
+        if order.order_status and order.order_status.lower() == "ofs":
+            order.order_status = pur_in.company or order.company or "Purchased"
+
     purchase = Purchase(
         order_id=pur_in.order_id,
         order_date=pur_in.order_date or getattr(order, 'order_process_date', None) or getattr(order, 'order_date', date.today()),
@@ -89,16 +112,15 @@ def create_purchase(
         notes=pur_in.notes,
         company=pur_in.company or order.company,
         qty=pur_in.qty or order.qty,
-        status="Purchased"
+        status=pur_status
     )
     db.add(purchase)
     
-    # Sync costs & delivery code back to Order (no status changes)
-    if pur_in.purchase_value:
+    # Sync costs & delivery code back to Order
+    if pur_in.purchase_value is not None:
         order.purchase_cost_inr = pur_in.purchase_value + (pur_in.other_cost or 0.0) + (pur_in.extra_cost or 0.0)
     if pur_in.delivery_code:
         order.oi = pur_in.delivery_code
-    # NOTE: Order Status (order_status) is NOT touched by purchase actions
 
     # Store excess quantity into Inventory for future orders
     purchased_qty = pur_in.qty or order.qty or 1
