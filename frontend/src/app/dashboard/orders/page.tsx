@@ -203,6 +203,7 @@ export default function OrdersPage() {
   const [selectedPurchaseStatus, setSelectedPurchaseStatus] = useState<string>('All');
   const [selectedHoldStatus, setSelectedHoldStatus] = useState<'All' | 'hold' | 'active'>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
+  const [selectedForwardingStatus, setSelectedForwardingStatus] = useState<string>('All');
   const [dateFieldType, setDateFieldType] = useState<string>('order_process_date');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
@@ -890,21 +891,40 @@ export default function OrdersPage() {
       });
     }
 
+    if (selectedForwardingStatus !== 'All') {
+      result = result.filter(o => {
+        const matchingShip = shipmentsList.find((s: any) => s.order_id === o.id);
+        const fwd = (o.label_tracking_id || matchingShip?.forwarding_number || '').trim();
+        if (selectedForwardingStatus === 'has_forwarding') {
+          return Boolean(fwd);
+        }
+        if (selectedForwardingStatus === 'no_forwarding') {
+          return !fwd;
+        }
+        return true;
+      });
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      result = result.filter(o =>
-        o.order_number?.toLowerCase().includes(q) ||
-        o.shipment_id?.toLowerCase().includes(q) ||
-        o.consignee_name?.toLowerCase().includes(q) ||
-        o.buyer_name?.toLowerCase().includes(q) ||
-        o.product_name?.toLowerCase().includes(q) ||
-        o.seller_account?.toLowerCase().includes(q) ||
-        o.city?.toLowerCase().includes(q) ||
-        o.state?.toLowerCase().includes(q) ||
-        o.zip_code?.toLowerCase().includes(q) ||
-        o.oi?.toLowerCase().includes(q) ||
-        o.mobile_number?.toLowerCase().includes(q)
-      );
+      result = result.filter(o => {
+        const matchingShip = shipmentsList.find((s: any) => s.order_id === o.id);
+        const fwd = (o.label_tracking_id || matchingShip?.forwarding_number || '').toLowerCase();
+        return (
+          o.order_number?.toLowerCase().includes(q) ||
+          o.shipment_id?.toLowerCase().includes(q) ||
+          fwd.includes(q) ||
+          o.consignee_name?.toLowerCase().includes(q) ||
+          o.buyer_name?.toLowerCase().includes(q) ||
+          o.product_name?.toLowerCase().includes(q) ||
+          o.seller_account?.toLowerCase().includes(q) ||
+          o.city?.toLowerCase().includes(q) ||
+          o.state?.toLowerCase().includes(q) ||
+          o.zip_code?.toLowerCase().includes(q) ||
+          o.oi?.toLowerCase().includes(q) ||
+          o.mobile_number?.toLowerCase().includes(q)
+        );
+      });
     }
 
     const getDateValue = (o: any) => {
@@ -939,6 +959,7 @@ export default function OrdersPage() {
       selectedPurchaseStatus,
       selectedHoldStatus,
       selectedStatus,
+      selectedForwardingStatus,
       dateFieldType,
       searchQuery,
       startDate,
@@ -953,11 +974,13 @@ export default function OrdersPage() {
   }, [
     orders,
     purchasesList,
+    shipmentsList,
     selectedCompany,
     selectedSellerAccount,
     selectedPurchaseStatus,
     selectedHoldStatus,
     selectedStatus,
+    selectedForwardingStatus,
     dateFieldType,
     searchQuery,
     startDate,
@@ -2204,7 +2227,7 @@ export default function OrdersPage() {
           </div>
 
           {/* Quick Clear Button */}
-          {(selectedCompany !== 'All' || selectedSellerAccount !== 'All' || selectedPurchaseStatus !== 'All' || selectedHoldStatus !== 'All' || selectedStatus !== 'All' || startDate || endDate || searchQuery) && (
+          {(selectedCompany !== 'All' || selectedSellerAccount !== 'All' || selectedPurchaseStatus !== 'All' || selectedHoldStatus !== 'All' || selectedStatus !== 'All' || selectedForwardingStatus !== 'All' || startDate || endDate || searchQuery) && (
             <button
               onClick={() => {
                 setSelectedCompany('All');
@@ -2212,6 +2235,7 @@ export default function OrdersPage() {
                 setSelectedPurchaseStatus('All');
                 setSelectedHoldStatus('All');
                 setSelectedStatus('All');
+                setSelectedForwardingStatus('All');
                 setDateFieldType('order_process_date');
                 setStartDate('');
                 setEndDate('');
@@ -2226,7 +2250,7 @@ export default function OrdersPage() {
         </div>
 
         {/* Row 2: Secondary Dropdown Filters & Search Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 border-t border-[#e0e0e0]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2 pt-1 border-t border-[#e0e0e0]">
           {/* Company / Person Filter */}
           <div>
             <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5">Company / Person</label>
@@ -2258,6 +2282,23 @@ export default function OrdersPage() {
                   {acc} ({orders.filter(o => o.seller_account?.toLowerCase() === acc.toLowerCase()).length})
                 </option>
               ))}
+            </select>
+          </div>
+
+          {/* Forwarding ID Filter */}
+          <div>
+            <label className="block text-[10px] font-bold text-[#50575e] uppercase mb-0.5 flex items-center gap-1">
+              <Barcode className="w-3 h-3 text-[#2271b1]" />
+              <span>Forwarding ID</span>
+            </label>
+            <select
+              value={selectedForwardingStatus}
+              onChange={(e) => setSelectedForwardingStatus(e.target.value)}
+              className="w-full px-2 py-1.5 bg-white border border-[#8c8f94] rounded-xs text-xs font-bold text-[#1d2327] outline-none focus:border-[#2271b1] cursor-pointer"
+            >
+              <option value="All">All Forwarding IDs</option>
+              <option value="has_forwarding">With Forwarding ID</option>
+              <option value="no_forwarding">Without Forwarding ID</option>
             </select>
           </div>
 
@@ -2323,7 +2364,7 @@ export default function OrdersPage() {
             <Search className="w-4 h-4 text-[#50575e] absolute left-3 top-2" />
             <input
               type="text"
-              placeholder="Search Order #, Consignee, Product, Seller Account..."
+              placeholder="Search Order #, Forwarding ID, Consignee, Product, Seller Account..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-white border border-[#8c8f94] text-xs pl-9 pr-3 py-1.5 rounded-xs focus:border-[#2271b1] outline-none font-medium"
@@ -2354,6 +2395,12 @@ export default function OrdersPage() {
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#e8f3fc] text-[#2271b1] font-bold rounded-xs border border-[#72aee6] text-[11px]">
                 Seller: {selectedSellerAccount}
                 <button onClick={() => setSelectedSellerAccount('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
+              </span>
+            )}
+            {selectedForwardingStatus !== 'All' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-cyan-50 text-cyan-900 font-bold rounded-xs border border-cyan-300 text-[11px]">
+                Forwarding: {selectedForwardingStatus === 'has_forwarding' ? 'With Forwarding ID' : 'Without Forwarding ID'}
+                <button onClick={() => setSelectedForwardingStatus('All')} className="hover:text-red-600 font-bold ml-0.5">✕</button>
               </span>
             )}
             {selectedPurchaseStatus !== 'All' && (

@@ -82,6 +82,31 @@ async def lifespan(app: FastAPI):
         costs = db.query(MonthlyAdminCost).all()
         for c in costs:
             sync_admin_cost_share_for_month(c.month, db)
+
+        # Auto-cleanup legacy orders where order_status was set to a partner name during bulk upload
+        try:
+            from app.models.order import Order
+            from app.models.partner import Partner
+            from app.models.company import Company
+            partner_names = [p.partner_name.strip().lower() for p in db.query(Partner).all() if p.partner_name]
+            company_names = [c.company_name.strip().lower() for c in db.query(Company).all() if c.company_name]
+            invalid_status_names = set(partner_names + company_names) - {'in stock', 'adbh', 'canton', 'doweta', 'shipped', 'ofs', 'ready to ship', 'delivered', 'pending'}
+            if invalid_status_names:
+                orders_to_fix = db.query(Order).filter(Order.order_status.isnot(None)).all()
+                fixed_orders = 0
+                for ord_item in orders_to_fix:
+                    cur_st = (ord_item.order_status or '').strip()
+                    if cur_st.lower() in invalid_status_names:
+                        if not ord_item.company or ord_item.company.strip() == '':
+                            ord_item.company = cur_st
+                        ord_item.order_status = "ADBH"
+                        fixed_orders += 1
+                if fixed_orders > 0:
+                    db.commit()
+                    logger.info(f"Auto-cleaned {fixed_orders} legacy orders with partner names in order_status.")
+        except Exception as cleanup_err:
+            logger.warning(f"Could not auto-clean order statuses: {cleanup_err}")
+
         logger.info("System startup checks completed.")
 
         # Non-blocking background sync of S3 uploads to local cache

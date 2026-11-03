@@ -951,7 +951,7 @@ KEY_MAPPINGS = {
     "shipping_date": ["shippingdate", "shipdate", "dateshipped", "dispatcheddate", "shipmentdate"],
     "last_delivery_date": ["lastdeliverydate", "deliverydate", "deliverby", "latestdeliverydate", "expecteddeliverydate", "maxdeliverydate"],
     "arriving_date": ["arrivingdate", "arrivaldate", "estimatedarrival", "expectedarrivaldate"],
-    "company": ["company", "companyname", "companyperson", "companyorperson", "companyandperson", "person", "personname", "sourcingagent", "client", "buyercompany", "clientcompany"],
+    "company": ["company", "companyname", "companyperson", "companyorperson", "companyandperson", "person", "personname", "sourcingagent", "client", "buyercompany", "clientcompany", "partner", "partners", "partnername", "sourcingpartner"],
     "shipment_id": ["shipmentid", "shipmentnumber", "shipmentno", "awb", "trackingid", "shipmentcode"],
     "forwarding_id": ["forwardingid", "forwardingnumber", "forwarding", "forwardingno", "forwardingcode", "forwardingtrackingid"],
     "seller_account": ["selleraccount", "seller", "store", "account", "sellername", "merchant", "storeaccount"],
@@ -960,7 +960,7 @@ KEY_MAPPINGS = {
     "product_image": ["productimage", "image", "imageurl", "img", "photourl"],
     "qty": ["qty", "quantity", "quantitypurchased", "units", "count", "itemqty"],
     "price_usd": ["priceusd", "price", "productprice", "itemprice", "unitprice", "amount", "totalprice", "itemsubtotal", "saleamount"],
-    "order_status": ["orderstatus", "fulfillmentpartner", "sourcingpartner", "fulfillmentchannel", "fulfillment", "partner", "carrierstatus", "stockstatus", "status"],
+    "order_status": ["orderstatus", "order_status", "orderstatuscode", "fulfillmentchannel", "fulfillment", "carrierstatus", "stockstatus", "status"],
     "consignee_name": ["consigneename", "consignee", "buyername", "buyer", "customername", "customer", "recipientname", "recipient", "name"],
     "shipment_address_1": ["shipmentaddress1", "address1", "shipaddress1", "streetaddress", "address", "street", "addressline1"],
     "shipment_address_2": ["shipmentaddress2", "address2", "shipaddress2", "apartment", "suite", "unit", "addressline2"],
@@ -981,6 +981,7 @@ SAMPLE_HEADERS = [
     "Arriving Date",
     "Company / Person",
     "Shipment ID",
+    "Forwarding ID",
     "Seller Account",
     "Product Name",
     "Product URL",
@@ -1009,6 +1010,7 @@ SAMPLE_DATA_ROWS = [
         date.today().strftime("%Y-%m-%d"),
         "ADBH",
         "INBTL001",
+        "FWD-8829101",
         "Store US #1",
         "Sea Buckthorn Berry Juice 500ml",
         "https://example.com/product/sea-buckthorn",
@@ -1035,6 +1037,7 @@ SAMPLE_DATA_ROWS = [
         date.today().strftime("%Y-%m-%d"),
         "Vetai",
         "INBTL002",
+        "FWD-8829102",
         "Store US #2",
         "Organic Vitamin C Serum 30ml @ Hydrating Hyaluronic Cream 50g",
         "https://example.com/product/serum @ https://example.com/product/cream",
@@ -1061,6 +1064,7 @@ SAMPLE_DATA_ROWS = [
         date.today().strftime("%Y-%m-%d"),
         "Globle",
         "INBTL003",
+        "FWD-8829103",
         "Store US #3",
         "Natural Tea Tree Face Wash 150ml",
         "https://example.com/product/face-wash",
@@ -1087,6 +1091,7 @@ SAMPLE_DATA_ROWS = [
         date.today().strftime("%Y-%m-%d"),
         "Globle",
         "INBTL003",
+        "FWD-8829103",
         "Store US #3",
         "Purifying Charcoal Clay Mask 100g",
         "https://example.com/product/clay-mask",
@@ -1705,6 +1710,37 @@ async def upload_bulk_orders_file(
             status_code=500,
             detail=f"An error occurred while saving imported orders: {str(exc)}"
         )
+
+@router.post("/cleanup-partner-statuses")
+def cleanup_partner_statuses(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_permission("orders:write")),
+):
+    """
+    Clean up legacy orders where 'order_status' was incorrectly saved as a Partner or Company person's name
+    during bulk upload. Moves the name to 'company' if blank and resets 'order_status' to a valid status ('ADBH').
+    """
+    from app.models.partner import Partner
+    from app.models.company import Company
+
+    partner_names = [p.partner_name.strip().lower() for p in db.query(Partner).all() if p.partner_name]
+    company_names = [c.company_name.strip().lower() for c in db.query(Company).all() if c.company_name]
+    invalid_status_names = set(partner_names + company_names) - {'in stock', 'adbh', 'canton', 'doweta', 'shipped', 'ofs', 'ready to ship', 'delivered', 'pending'}
+
+    fixed_count = 0
+    if invalid_status_names:
+        orders_to_fix = db.query(Order).filter(Order.order_status.isnot(None)).all()
+        for ord_item in orders_to_fix:
+            cur_st = (ord_item.order_status or '').strip()
+            if cur_st.lower() in invalid_status_names:
+                if not ord_item.company or ord_item.company.strip() == '':
+                    ord_item.company = cur_st
+                ord_item.order_status = "ADBH"
+                fixed_count += 1
+        if fixed_count > 0:
+            db.commit()
+
+    return {"message": f"Successfully cleaned up {fixed_count} orders with partner names in order_status.", "fixed_count": fixed_count}
 
 @router.post("/bulk", response_model=List[OrderResponse])
 def create_bulk_orders(

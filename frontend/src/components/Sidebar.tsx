@@ -65,7 +65,7 @@ export default function Sidebar() {
       // { name: 'Employees', href: '/dashboard/employees', icon: Users, perm: 'employees:read' },
       // { name: 'Channel Partners', href: '/dashboard/partners', icon: Store, perm: 'employees:read' },
       // { name: 'Expense Claims', href: '/dashboard/expenses', icon: Receipt, perm: 'employees:read' },
-      // { name: 'Finance', href: '/dashboard/finance', icon: IndianRupee, perm: 'finance:admin' },
+      { name: 'Finance & Reports', href: '/dashboard/finance', icon: IndianRupee, perm: 'finance:admin' },
       { name: 'Roles & Permissions', href: '/dashboard/roles', icon: ShieldCheck, perm: 'roles:manage' },
     ];
 

@@ -136,6 +136,7 @@ export const ordersApi = {
   update: (id: number, data: any) => api.put(`/orders/${id}`, data),
   updateStatus: (id: number, status: string) => api.put(`/orders/${id}`, { status, order_status: status }),
   toggleHold: (id: number, reason?: string) => api.post(`/orders/${id}/toggle-hold`, { reason }),
+  cleanupPartnerStatuses: () => api.post('/orders/cleanup-partner-statuses'),
   uploadCsv: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -250,5 +251,21 @@ export const tasksApi = {
 export const financeApi = {
   getSummary: (period?: string) => api.get('/finance/summary', { params: { period: period || 'all' } }),
   getBreakdown: (period?: string) => api.get('/finance/breakdown', { params: { period: period || 'all' } }),
+  getCompanyPartnerReport: (params?: any) => api.get('/finance/reports/company-partner', { params }),
+  getCompanyPartnerExportUrl: (params?: any) => {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      Object.keys(params).forEach((key) => {
+        if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
+          searchParams.append(key, String(params[key]));
+        }
+      });
+    }
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
+    if (token) {
+      searchParams.append('token', token);
+    }
+    return `/api/finance/reports/company-partner/export-csv?${searchParams.toString()}`;
+  },
 };
 
