@@ -161,7 +161,6 @@ def create_shipment(
 
     # Mark order status as Shipped and sync carrier info
     order.status = "Shipped"
-    order.order_status = "Shipped"
     order.delivery_service = ship_in.shipment_partner
     order.label_free = is_free
     order.label_cost_usd = label_usd
@@ -243,7 +242,6 @@ def update_shipment(
     if order:
         if ship_in.status is not None:
             order.status = ship_in.status
-            order.order_status = ship_in.status
         if ship_in.label_free is not None:
             order.label_free = shipment.label_free
         if ship_in.label_cost_usd is not None:

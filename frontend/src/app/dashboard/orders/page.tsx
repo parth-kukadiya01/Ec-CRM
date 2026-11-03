@@ -1158,6 +1158,10 @@ export default function OrdersPage() {
 
     if (parsedItems.length > 1) {
       setIsMultiProduct(true);
+      // Deterministically sort existing purchases by id ascending to maintain consistent item order
+      const availablePurs = [...existingPurs].sort((a: any, b: any) => (a.id || 0) - (b.id || 0));
+      const usedPurIds = new Set<number>();
+
       const items: PurchaseItem[] = parsedItems.map((p: any, idx: number) => {
         const itemInv = inventoryList.find((inv: any) =>
           (p.product_id && inv.id === p.product_id) ||
@@ -1165,13 +1169,33 @@ export default function OrdersPage() {
         );
         const inStockQty = itemInv?.stock_quantity || 0;
 
-        // Try to match existing purchase by product name or index
-        const matchedPur = existingPurs.find((ep: any) =>
+        // Strict 1-to-1 match: exact product_name, then sku, then index, then first unused
+        let matchedPur = availablePurs.find((ep: any) =>
+          !usedPurIds.has(ep.id) &&
           ep.product_name && p.product_name &&
-          (ep.product_name.toLowerCase() === p.product_name.toLowerCase() ||
-            ep.product_name.toLowerCase().includes(p.product_name.toLowerCase().substring(0, 15)) ||
-            p.product_name.toLowerCase().includes(ep.product_name.toLowerCase().substring(0, 15)))
-        ) || existingPurs[idx];
+          ep.product_name.trim().toLowerCase() === p.product_name.trim().toLowerCase()
+        );
+
+        if (!matchedPur && (p.sku || itemInv?.sku)) {
+          const targetSku = (p.sku || itemInv?.sku).trim().toLowerCase();
+          matchedPur = availablePurs.find((ep: any) =>
+            !usedPurIds.has(ep.id) &&
+            ep.sku &&
+            ep.sku.trim().toLowerCase() === targetSku
+          );
+        }
+
+        if (!matchedPur && availablePurs[idx] && !usedPurIds.has(availablePurs[idx].id)) {
+          matchedPur = availablePurs[idx];
+        }
+
+        if (!matchedPur) {
+          matchedPur = availablePurs.find((ep: any) => !usedPurIds.has(ep.id));
+        }
+
+        if (matchedPur && matchedPur.id) {
+          usedPurIds.add(matchedPur.id);
+        }
 
         const itemStatus = (p.order_status || '').trim();
         const isStatusInStock = itemStatus.toLowerCase() === 'in stock' || itemStatus.toLowerCase() === 'instock';
@@ -1375,7 +1399,8 @@ export default function OrdersPage() {
         } catch (e) { }
 
         const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
-        const finalOrderStatus = allOFS ? 'OFS' : (allInStock ? 'in stock' : (selectedOrderForPurchase.company || 'Purchased'));
+        const validExistingStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === (selectedOrderForPurchase.order_status || '').toLowerCase()) || 'ADBH';
+        const finalOrderStatus = allInStock ? 'in stock' : validExistingStatus;
 
         await ordersApi.update(selectedOrderForPurchase.id, {
           purchase_cost_inr: totalPurchaseCostAll,
@@ -1437,7 +1462,8 @@ export default function OrdersPage() {
       const isStock = Boolean(purchaseForm.is_in_stock);
       const purStatus = isStock ? 'Received' : 'Pending';
       const ordStatus = isStock ? 'In Stock' : 'Purchase Pending';
-      const finalOrderStatus = isStock ? 'in stock' : (purchaseForm.company || selectedOrderForPurchase.company || 'Purchased');
+      const validExistingStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === (selectedOrderForPurchase.order_status || '').toLowerCase()) || 'ADBH';
+      const finalOrderStatus = isStock ? 'in stock' : validExistingStatus;
 
       // Clean up any old purchases for this order (especially dummy OFS entries)
       const existingPurs = purchasesList.filter((p: any) => p.order_id === purchaseForm.order_id);
@@ -1554,7 +1580,6 @@ export default function OrdersPage() {
 
       await ordersApi.update(order.id, {
         status: 'OFS',
-        order_status: 'OFS'
       });
 
       toast.success(`Order #${order.order_number} marked as OFS`, 'Status Updated');
@@ -2678,7 +2703,7 @@ export default function OrdersPage() {
                           <td className="py-1.5 px-2 border-r border-[#e0e0e0] text-center">
                             {(() => {
                               const cur = (ord.order_status || '').trim();
-                              const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || cur;
+                              const matchedStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === cur.toLowerCase()) || 'ADBH';
                               const s = matchedStatus.toLowerCase();
                               const colorClass =
                                 (s === 'in stock' || s === 'instock') ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200' :
@@ -2688,17 +2713,11 @@ export default function OrdersPage() {
                                         'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200';
                               return (
                                 <select
-                                  value={matchedStatus || ''}
+                                  value={matchedStatus}
                                   onChange={(e) => handleStatusChange(ord.id, e.target.value)}
                                   className={`px-2 py-1 font-bold text-[10px] uppercase rounded-xs border outline-none cursor-pointer transition-all ${colorClass}`}
                                   title="Change Order Status"
                                 >
-                                  {!matchedStatus && <option value="" className="bg-white text-[#50575e]">—</option>}
-                                  {matchedStatus && !ORDER_STATUS_OPTIONS.some(o => o.toLowerCase() === matchedStatus.toLowerCase()) && (
-                                    <option value={matchedStatus} className="bg-white text-[#1d2327] font-bold">
-                                      {matchedStatus}
-                                    </option>
-                                  )}
                                   {ORDER_STATUS_OPTIONS.map((status) => (
                                     <option key={status} value={status} className="bg-white text-[#1d2327] font-bold">
                                       {status}
@@ -2727,17 +2746,27 @@ export default function OrdersPage() {
 
                                 if (matchingPurs.length > 0) {
                                   const totalInr = matchingPurs.reduce((sum: number, p: any) => sum + (parseFloat(p.purchase_value) || 0), 0);
+                                  const sortedPurs = [...matchingPurs].sort((a: any, b: any) => (a.id || 0) - (b.id || 0));
+                                  const usedTablePurIds = new Set<number>();
 
                                   return (
                                     <div className="flex flex-col items-center justify-center gap-1 py-1">
                                       <div className="flex flex-col gap-1 w-full max-w-[210px]">
                                         {multiItems.map((item: any, i: number) => {
-                                          const pur = matchingPurs.find((p: any) =>
-                                            p.product_name && item.product_name && (
-                                              p.product_name.toLowerCase().includes(item.product_name.toLowerCase().substring(0, 15)) ||
-                                              item.product_name.toLowerCase().includes(p.product_name.toLowerCase().substring(0, 15))
-                                            )
-                                          ) || matchingPurs[i];
+                                          let pur = sortedPurs.find((p: any) =>
+                                            !usedTablePurIds.has(p.id) &&
+                                            p.product_name && item.product_name &&
+                                            p.product_name.trim().toLowerCase() === item.product_name.trim().toLowerCase()
+                                          );
+                                          if (!pur && sortedPurs[i] && !usedTablePurIds.has(sortedPurs[i].id)) {
+                                            pur = sortedPurs[i];
+                                          }
+                                          if (!pur) {
+                                            pur = sortedPurs.find((p: any) => !usedTablePurIds.has(p.id));
+                                          }
+                                          if (pur && pur.id) {
+                                            usedTablePurIds.add(pur.id);
+                                          }
 
                                           const isStock = pur ? Boolean(pur.is_in_stock || pur.purchase_partner_name === 'In Stock' || pur.bank === 'In Stock' || pur.notes?.includes('In-Stock')) : false;
                                           const isOFS = pur ? Boolean(pur.status === 'OFS' || pur.purchase_partner_name === 'OFS' || pur.notes?.includes('OFS')) : (item.order_status?.toLowerCase() === 'ofs');

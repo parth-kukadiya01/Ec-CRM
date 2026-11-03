@@ -83,27 +83,35 @@ async def lifespan(app: FastAPI):
         for c in costs:
             sync_admin_cost_share_for_month(c.month, db)
 
-        # Auto-cleanup legacy orders where order_status was set to a partner name during bulk upload
+        # Auto-cleanup legacy orders where order_status was set to a partner name or shipment status
         try:
             from app.models.order import Order
             from app.models.partner import Partner
             from app.models.company import Company
-            partner_names = [p.partner_name.strip().lower() for p in db.query(Partner).all() if p.partner_name]
-            company_names = [c.company_name.strip().lower() for c in db.query(Company).all() if c.company_name]
-            invalid_status_names = set(partner_names + company_names) - {'in stock', 'adbh', 'canton', 'doweta', 'shipped', 'ofs', 'ready to ship', 'delivered', 'pending'}
-            if invalid_status_names:
-                orders_to_fix = db.query(Order).filter(Order.order_status.isnot(None)).all()
-                fixed_orders = 0
-                for ord_item in orders_to_fix:
-                    cur_st = (ord_item.order_status or '').strip()
-                    if cur_st.lower() in invalid_status_names:
-                        if not ord_item.company or ord_item.company.strip() == '':
-                            ord_item.company = cur_st
-                        ord_item.order_status = "ADBH"
-                        fixed_orders += 1
-                if fixed_orders > 0:
-                    db.commit()
-                    logger.info(f"Auto-cleaned {fixed_orders} legacy orders with partner names in order_status.")
+            valid_order_statuses = {'in stock', 'adbh', 'canton', 'doweta'}
+            partner_names = [p.partner_name.strip() for p in db.query(Partner).all() if p.partner_name]
+            company_names = [c.company_name.strip() for c in db.query(Company).all() if c.company_name]
+            partner_map = {p.lower(): p for p in (partner_names + company_names)}
+
+            orders_to_fix = db.query(Order).filter(Order.order_status.isnot(None)).all()
+            fixed_orders = 0
+            for ord_item in orders_to_fix:
+                cur_st = (ord_item.order_status or '').strip()
+                if cur_st.lower() not in valid_order_statuses:
+                    # If cur_st is a partner name, assign it to company if empty
+                    matched_partner = partner_map.get(cur_st.lower())
+                    if matched_partner and (not ord_item.company or ord_item.company.strip() == ''):
+                        ord_item.company = matched_partner
+                    
+                    # If lifecycle status is empty and cur_st is Shipped or Delivered, preserve in status
+                    if cur_st.lower() in {'shipped', 'delivered'} and (not ord_item.status or ord_item.status.strip() == ''):
+                        ord_item.status = cur_st.capitalize()
+
+                    ord_item.order_status = "ADBH"
+                    fixed_orders += 1
+            if fixed_orders > 0:
+                db.commit()
+                logger.info(f"Auto-cleaned {fixed_orders} legacy orders with invalid order_status to 'ADBH'.")
         except Exception as cleanup_err:
             logger.warning(f"Could not auto-clean order statuses: {cleanup_err}")
 

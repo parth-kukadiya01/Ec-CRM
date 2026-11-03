@@ -6,6 +6,8 @@ import { ShoppingBag, CheckCircle, Clock, PackageCheck, Edit2, Trash2, ShieldAle
 import ResizableTable from '@/components/ResizableTable';
 import { hasPermission, getAllowedCompanies } from '@/lib/permissions';
 
+const ORDER_STATUS_OPTIONS = ['in stock', 'ADBH', 'Canton', 'Doweta'];
+
 export default function PurchasesPage() {
 
   const [activeTab, setActiveTab] = useState<'pending' | 'purchases'>('pending');
@@ -237,7 +239,9 @@ export default function PurchasesPage() {
     if (parsedItems.length > 1) {
       // Multi-product order: create per-item entries
       setIsMultiProduct(true);
-      const existingPurs = purchases.filter((p: any) => p.order_id === order.id);
+      const availablePurs = [...purchases.filter((p: any) => p.order_id === order.id)].sort((a: any, b: any) => (a.id || 0) - (b.id || 0));
+      const usedPurIds = new Set<number>();
+
       const items: PurchaseItem[] = parsedItems.map((p: any, idx: number) => {
         const itemInv = inventoryList.find((inv: any) =>
           (p.product_id && inv.id === p.product_id) ||
@@ -245,12 +249,33 @@ export default function PurchasesPage() {
         );
         const inStockQty = itemInv?.stock_quantity || 0;
 
-        const matchedPur = existingPurs.find((ep: any) =>
+        // Strict 1-to-1 match: exact product_name, then sku, then index, then first unused
+        let matchedPur = availablePurs.find((ep: any) =>
+          !usedPurIds.has(ep.id) &&
           ep.product_name && p.product_name &&
-          (ep.product_name.toLowerCase() === p.product_name.toLowerCase() ||
-           ep.product_name.toLowerCase().includes(p.product_name.toLowerCase().substring(0, 15)) ||
-           p.product_name.toLowerCase().includes(ep.product_name.toLowerCase().substring(0, 15)))
-        ) || existingPurs[idx];
+          ep.product_name.trim().toLowerCase() === p.product_name.trim().toLowerCase()
+        );
+
+        if (!matchedPur && (p.sku || itemInv?.sku)) {
+          const targetSku = (p.sku || itemInv?.sku).trim().toLowerCase();
+          matchedPur = availablePurs.find((ep: any) =>
+            !usedPurIds.has(ep.id) &&
+            ep.sku &&
+            ep.sku.trim().toLowerCase() === targetSku
+          );
+        }
+
+        if (!matchedPur && availablePurs[idx] && !usedPurIds.has(availablePurs[idx].id)) {
+          matchedPur = availablePurs[idx];
+        }
+
+        if (!matchedPur) {
+          matchedPur = availablePurs.find((ep: any) => !usedPurIds.has(ep.id));
+        }
+
+        if (matchedPur && matchedPur.id) {
+          usedPurIds.add(matchedPur.id);
+        }
 
         const itemStatus = (p.order_status || '').trim();
         const isStatusInStock = itemStatus.toLowerCase() === 'in stock' || itemStatus.toLowerCase() === 'instock';
@@ -363,7 +388,6 @@ export default function PurchasesPage() {
 
       await ordersApi.update(order.id, {
         status: 'OFS',
-        order_status: 'OFS'
       });
 
       await loadAllData();
@@ -463,7 +487,8 @@ export default function PurchasesPage() {
 
         const allOFS = purchaseItems.length > 0 && purchaseItems.every(it => it.is_ofs);
         const ordStatus = allOFS ? 'OFS' : (allInStock ? 'In Stock' : (anyInStock ? 'Partially In Stock' : 'Purchased'));
-        const finalOrderStatus = allOFS ? 'OFS' : (allInStock ? 'in stock' : (selectedOrder.company || 'Purchased'));
+        const validExistingStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === (selectedOrder.order_status || '').toLowerCase()) || 'ADBH';
+        const finalOrderStatus = allInStock ? 'in stock' : validExistingStatus;
 
         await ordersApi.update(purchaseForm.order_id, {
           purchase_cost_inr: totalPurchaseCostAll,
@@ -499,7 +524,8 @@ export default function PurchasesPage() {
         const isStock = Boolean(purchaseForm.is_in_stock);
         const purStatus = isStock ? 'Received' : 'Pending';
         const ordStatus = isStock ? 'In Stock' : 'Purchase Pending';
-        const finalOrderStatus = isStock ? 'in stock' : (purchaseForm.company || selectedOrder.company || 'Purchased');
+        const validExistingStatus = ORDER_STATUS_OPTIONS.find(opt => opt.toLowerCase() === (selectedOrder.order_status || '').toLowerCase()) || 'ADBH';
+        const finalOrderStatus = isStock ? 'in stock' : validExistingStatus;
 
         // Clean up any old purchases for this order (especially dummy OFS entries)
         const existingPurs = purchases.filter((p: any) => p.order_id === purchaseForm.order_id);

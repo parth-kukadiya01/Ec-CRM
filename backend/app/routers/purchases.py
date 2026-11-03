@@ -115,10 +115,12 @@ def create_purchase(
         status=pur_status
     )
     db.add(purchase)
+    db.flush()
     
-    # Sync costs & delivery code back to Order
-    if pur_in.purchase_value is not None:
-        order.purchase_cost_inr = pur_in.purchase_value + (pur_in.other_cost or 0.0) + (pur_in.extra_cost or 0.0)
+    # Sync costs & delivery code back to Order (sum across all purchases for this order)
+    from sqlalchemy import func
+    tot_pur_cost = db.query(func.coalesce(func.sum(Purchase.purchase_value), 0.0)).filter(Purchase.order_id == order.id).scalar() or 0.0
+    order.purchase_cost_inr = tot_pur_cost
     if pur_in.delivery_code:
         order.oi = pur_in.delivery_code
 
@@ -211,8 +213,10 @@ def update_purchase(
     # Sync back to associated Order (costs & delivery code only — no status changes)
     order = db.query(Order).filter(Order.id == purchase.order_id).first()
     if order:
-        if purchase.purchase_value:
-            order.purchase_cost_inr = purchase.purchase_value
+        db.flush()
+        from sqlalchemy import func
+        tot_pur_cost = db.query(func.coalesce(func.sum(Purchase.purchase_value), 0.0)).filter(Purchase.order_id == order.id).scalar() or 0.0
+        order.purchase_cost_inr = tot_pur_cost
         if purchase.delivery_code:
             order.oi = purchase.delivery_code
 
@@ -269,19 +273,17 @@ def delete_purchase(
         raise HTTPException(status_code=404, detail="Purchase not found")
 
     order = db.query(Order).filter(Order.id == purchase.order_id).first()
+    db.delete(purchase)
+    db.flush()
     if order:
-        other_pur = db.query(Purchase).filter(Purchase.order_id == order.id, Purchase.id != purchase.id).first()
-        if not other_pur:
-            order.purchase_cost_inr = 0.0
+        from sqlalchemy import func
+        tot_pur_cost = db.query(func.coalesce(func.sum(Purchase.purchase_value), 0.0)).filter(Purchase.order_id == order.id).scalar() or 0.0
+        order.purchase_cost_inr = tot_pur_cost
+        if tot_pur_cost == 0:
             if order.status in ["Purchase Pending", "In Stock", "Ready to Ship"]:
                 order.status = "Pending"
-            if order.order_status in ["Purchase Pending", "In Stock"]:
-                order.order_status = "Pending"
             # Bring reverted order to the very top of Orders list
             order.created_at = datetime.utcnow()
-        else:
-            order.purchase_cost_inr = other_pur.purchase_value or 0.0
 
-    db.delete(purchase)
     db.commit()
     return {"message": "Purchase deleted successfully"}
